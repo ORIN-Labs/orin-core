@@ -7,6 +7,8 @@
   "scripts": {
     "start": "ts-node src/listener.ts",
     "simulate": "ts-node src/simulate_frontend.ts",
+    "start_devnet": "export RPC_ENDPOINT=https://api.devnet.solana.com && ts-node src/listener.ts",
+    "simulate_devnet": "export RPC_ENDPOINT=https://api.devnet.solana.com && ts-node src/simulate_frontend.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

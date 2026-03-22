@@ -24,7 +24,7 @@ ORIN is a revolutionary DePIN protocol that recognizes users across physical spa
 
 ## 👥 Core Team
 - **Shalom:** Founder & Visionary (10+ years in Hospitality)
-- **Kyle (@dex_p):** Technical Lead (Smart Contracts & Backend)
+- **Kyle Meng:** Technical Lead (Smart Contracts & Backend)
 - **Defi Mantle:** Frontend & UI/UX Engineer
 - **Victor:** Strategy & M&A
 
