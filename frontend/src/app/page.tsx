@@ -1,6 +1,11 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import { useState } from "react";
+
+const GuestDashboard = dynamic(() => import("@/components/GuestDashboard"), {
+  ssr: false,
+});
 
 const RoomControl = dynamic(() => import("@/components/RoomControl"), {
   ssr: false,
@@ -12,11 +17,15 @@ const WalletMultiButton = dynamic(
 );
 
 export default function Home() {
+  const [view, setView] = useState<"dashboard" | "controls">("dashboard");
+
   return (
     <main style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       {/* ── Nav ─────────────────────────────────── */}
       <nav className="nav">
-        <div className="nav-logo">ORIN<span>.</span></div>
+        <div className="nav-logo" style={{ cursor: "pointer" }} onClick={() => setView("dashboard")}>
+          ORIN<span>.</span>
+        </div>
         <WalletMultiButton />
       </nav>
 
@@ -24,7 +33,11 @@ export default function Home() {
       <div style={{ flex: 1, padding: "80px 60px", position: "relative" }}>
         <div className="page-glow" />
         <div style={{ position: "relative" }}>
-          <RoomControl />
+          {view === "dashboard" ? (
+            <GuestDashboard onEnterRoom={() => setView("controls")} />
+          ) : (
+            <RoomControl />
+          )}
         </div>
       </div>
 

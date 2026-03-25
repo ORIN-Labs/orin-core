@@ -14,7 +14,7 @@
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { generateSha256Hash } from "./hash";
-import { stageVoiceCommand, GuestContext } from "./api";
+import { stageVoiceCommand, stageManualPreferences, GuestContext } from "./api";
 import { updatePreferencesOnChain } from "./solana";
 
 export interface RoomPreferences {
@@ -31,18 +31,11 @@ export interface SavePreferencesResult {
 }
 
 /**
- * Orchestrates the full Hash-Lock workflow.
- *
- * @param program     - Connected Anchor program instance
- * @param guestPda    - The guest's PDA (from deriveGuestPda)
- * @param ownerPubkey - The connected wallet's public key
- * @param userInput   - Natural language or descriptive text of what the guest wants
- * @param preferences - The structured room preferences payload
- * @param guestContext - Guest identity context for the AI agent
- *
- * @returns Object with API acceptance, hash hex, and Solana TX signature
+ * Voice AI Workflow
+ * Orchestrates the Hash-Lock workflow for natural language inputs.
+ * Uses the /api/v1/voice-command endpoint.
  */
-export async function savePreferences(
+export async function saveVoicePreferences(
   program: Program,
   guestPda: PublicKey,
   ownerPubkey: PublicKey,
@@ -50,30 +43,42 @@ export async function savePreferences(
   preferences: RoomPreferences,
   guestContext: GuestContext
 ): Promise<SavePreferencesResult> {
-  // ─── Step A: Stage command in backend (Redis) ───────────────
   const apiResponse = await stageVoiceCommand({
     guestPda: guestPda.toBase58(),
     userInput,
     guestContext,
   });
 
-  // ─── Step B: Hash payload locally in browser ────────────────
   const hashBytes = await generateSha256Hash(preferences);
-  const hashHex = Array.from(hashBytes)
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+  const hashHex = Array.from(hashBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 
-  // ─── Step C: Write ONLY the hash to Solana ──────────────────
-  const txSignature = await updatePreferencesOnChain(
-    program,
-    guestPda,
-    ownerPubkey,
-    hashBytes
-  );
+  const txSignature = await updatePreferencesOnChain(program, guestPda, ownerPubkey, hashBytes);
 
-  return {
-    apiAccepted: apiResponse.status === "accepted",
-    hashHex,
-    solanaTxSignature: txSignature,
-  };
+  return { apiAccepted: apiResponse.status === "accepted", hashHex, solanaTxSignature: txSignature };
+}
+
+/**
+ * Manual Bypass Workflow
+ * Orchestrates the Hash-Lock workflow for direct UI slider changes.
+ * Uses the high-speed /api/v1/preferences bypass endpoint.
+ */
+export async function saveManualPreferences(
+  program: Program,
+  guestPda: PublicKey,
+  ownerPubkey: PublicKey,
+  preferences: RoomPreferences,
+  guestContext: GuestContext
+): Promise<SavePreferencesResult> {
+  const apiResponse = await stageManualPreferences({
+    guestPda: guestPda.toBase58(),
+    preferences,
+    guestContext,
+  });
+
+  const hashBytes = await generateSha256Hash(preferences);
+  const hashHex = Array.from(hashBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  const txSignature = await updatePreferencesOnChain(program, guestPda, ownerPubkey, hashBytes);
+
+  return { apiAccepted: apiResponse.status === "accepted", hashHex, solanaTxSignature: txSignature };
 }
