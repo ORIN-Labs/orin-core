@@ -6,14 +6,14 @@ ORIN is a revolutionary DePIN protocol that recognizes users across physical spa
 
 ---
 
-## �Y�-️ Phase 1: MVP Architecture
+## 🏗️ Phase 1: MVP Architecture
 - **[On-chain]** **Sovereign Identity:** Anchor-based Guest PDA structure for immutable preference storage.
 - **[Middleware]** **Real-time Bridge:** High-performance Node.js & Firebase synchronization for sub-second physical response.
 - **[Physical]** **IoT Control:** Integrated Philips Hue & Google Nest control logic (Mocked for Phase 1 Demo).
 
-## �Y�� Modular Layers & Current Status
+## 🧩 Modular Layers & Current Status
 
-### �Y'' CEO & Product Visionary
+### 👑 CEO & Product Visionary
 **Status:** Active & Scaling by @Shalom
 
 The "Navigator" of ORIN, bridging technical innovation with real-world hospitality business.
@@ -22,7 +22,7 @@ The "Navigator" of ORIN, bridging technical innovation with real-world hospitali
 - **Product Quality (CPO):** Defining the "Premium & Seamless" brand identity and ensuring the UX meets global hospitality standards.
 - **Strategy:** Aligning the "Web2.5" roadmap with long-term market demands.
 
-### �YZ� Frontend Layer (UI/UX)
+### 🎨 Frontend Layer (UI/UX)
 **Status:** In Progress by @Defidoctor10
 
 The frontend is the "Entry Point" for guests, focusing on high-end animations and seamless Web3 onboarding.
@@ -31,7 +31,7 @@ The frontend is the "Entry Point" for guests, focusing on high-end animations an
 - **State Management:** Real-time sync with Solana Devnet via `@solana/web3.js` and our Backend Hub.
 - **Deliverables:** Guest Dashboard, Room Control Interface, and Service Booking.
 
-### �Y�-️ Backend & Settlement Layer (The Hub)
+### 🏗️ Backend & Settlement Layer (The Hub)
 **Status:** Core Ready by @dex_p (Kyle Meng)
 
 The "Brain" that bridges the physical IoT world with the Solana blockchain.
@@ -40,7 +40,7 @@ The "Brain" that bridges the physical IoT world with the Solana blockchain.
 - **IoT Bridge:** MQTT protocol integration to sync On-chain Preferences to physical hardware (Nest, Hue, etc.).
 - **Gas Relayer:** Handling meta-transactions to ensure guests never see a "Gas Fee" error.
 
-### �Y�� AI Intelligence Layer (Concierge)
+### 🧠 AI Intelligence Layer (Concierge)
 **Status:** Ready for @federico to implement.
 
 The "Intent Translator" that turns guest natural language into on-chain states.
@@ -48,18 +48,18 @@ The "Intent Translator" that turns guest natural language into on-chain states.
 - **Function:** Mapping *"I'm feeling cold"* -> `Instruction: update_preferences(temp: 24.5)`.
 - **Task:** Define System Prompts and response schemas for the "ORIN Concierge".
 
-## �Y>�️ Tech Stack
+## 🛠️ Tech Stack
 - **L1 & Logic:** `Solana` / `Anchor` / `Rust`
 - **Infrastructure:** `Node.js` / `TypeScript` / `Firebase Real-time DB`
 - **UI/UX:** `Next.js` / `Tailwind CSS` / `Solana Wallet Adapter`
 
-## �Y", Project Structure
+## 📂 Project Structure
 - `programs/` - The source of truth: Smart contracts in Rust.
 - `backend/` - The nervous system: Node.js listener and Firebase sync logic.
 - `frontend/` - The interface: Web3 dashboard for guest management.
 - `docs/` - Architecture diagrams and vision briefs.
 
-## �Y'� Core Team
+## 👥 Core Team
 - **Shalom:** Founder & Visionary (10+ years in Hospitality)
 - **Kyle Meng:** Technical Lead (Smart Contracts & Backend)
 - **Defi Mantle:** Frontend & UI/UX Engineer

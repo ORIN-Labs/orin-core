@@ -17,7 +17,7 @@ In ORIN, a user's identity is entirely abstracted via an email hash. The Anchor 
 
 **Seeds:** `[b"guest", sha256(email)]`
 
-### �Y"� TypeScript Implementation:
+###  TypeScript Implementation:
 ```typescript
 import { PublicKey } from '@solana/web3.js';
 // Make sure to install js-sha256 via npm/yarn
@@ -53,7 +53,7 @@ Our smart contract utilizes a **Privacy-First Hybrid Architecture**. Instead of 
 
 Here is the exact TypeScript type mapping you should use for your state management and UI scaffolding:
 
-### �Y"� Types:
+###  Types:
 ```typescript
 /**
  * Room Environmental Preferences (The JSON string parsed)
@@ -95,7 +95,7 @@ export interface FirebaseGuestState {
 
 Since querying Solana RPCs for rapid UI feedback is often too slow and rate-limited, the UI *reads* from Firebase. Use this snippet to trigger your Next.js/React re-renders "instantly" when a user checks in or updates their ambient settings.
 
-### �Y"� React Hook Example:
+###  React Hook Example:
 ```typescript
 import { useEffect, useState } from 'react';
 import { getDatabase, ref, onValue, off } from 'firebase/database';
@@ -131,7 +131,7 @@ export function useGuestRealtimeState(guestPda: string) {
 }
 ```
 
-**�Y"� Next Steps for Frontend:**
+** Next Steps for Frontend:**
 1. Implement the UI using the `RoomPreferences` interface.
 2. **Hybrid State Mutation**: To update preferences in a privacy-preserving way:
    - **Step A:** Send the raw JSON string to our backend HTTP Gateway (`POST /api/preferences`).
