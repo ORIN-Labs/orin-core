@@ -5,6 +5,7 @@ import { getEnv } from "../config/env";
 import { stateProvider } from "../state";
 import { createRequestLogger, logger } from "../shared/logger";
 import { GuestContext } from "../ai_agent";
+import { generateSha256Hash } from "../shared/hash";
 
 /**
  * ORIN Production API Gateway
@@ -61,6 +62,44 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
     message: "Command staged. Awaiting on-chain hash-lock validation.",
   });
 });
+
+/**
+ * DIRECT BYPASS ENDPOINT (Web2.5 High-Speed Channel)
+ * -------------------------------------------------------------
+ * For manual slider adjustments on the frontend that do not require
+ * AI inference. Receives explicit JSON, computes the canonical hash,
+ * and caches it directly in Redis awaiting Solana confirmation.
+ */
+app.post<{ Body: Record<string, unknown> }>("/api/v1/preferences", async (request, reply) => {
+  const reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+
+  // Production Auth Check: Protect memory exhaust attacks from unauthorized payloads
+  const apiKey = request.headers["x-api-key"];
+  if (apiKey !== env.API_KEY) {
+    reqLogger.warn({ origin: request.headers.origin }, "unauthorized_bypass_access");
+    return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+  }
+
+  // Ensure payload is an actual object preventing injection or bad formats
+  if (!request.body || typeof request.body !== "object" || Array.isArray(request.body)) {
+    reqLogger.error("invalid_preferences_body");
+    return reply.status(400).send({ error: "Invalid JSON object for preferences." });
+  }
+
+  // Generate canonical backend hash of the explicitly passed JSON options
+  // This matches frontend/src/lib/hash.ts strictly
+  const hashHex = generateSha256Hash(request.body).toString("hex");
+
+  await stateProvider.setDirectPayload(hashHex, request.body);
+  reqLogger.info({ hash: hashHex }, "direct_payload_stored");
+
+  return reply.status(200).send({
+    status: "success",
+    info: "Payload staged in Redis cache bypassing AI. Awaiting Solana Hash Verification signal.",
+    hash: hashHex
+  });
+});
+
 
 app.get("/health", async () => ({ status: "ok" }));
 

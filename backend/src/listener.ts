@@ -81,17 +81,32 @@ export function startSecureGatewayListener(): number {
         }
         await stateProvider.setLastProcessedHash(guestPda, onChainHashHex);
 
-        const pending = await stateProvider.getPendingCommand(guestPda);
-        if (!pending) {
-          requestLog.warn("no_pending_command_for_guest_skip");
-          return;
-        }
+        let payload: any;
+        let aiHash: Buffer;
 
-        const guestContext = buildGuestContext(decodedAccount);
-        const { payload, hash: aiHash } = await agent.processCommand(
-          pending.userInput,
-          pending.guestContext ?? guestContext
-        );
+        // Bypassing AI for direct manual payload from /api/preferences
+        const directPayload = await stateProvider.getDirectPayload(onChainHashHex);
+
+        if (directPayload) {
+          requestLog.info({ hash: onChainHashHex }, "direct_payload_cache_hit_bypassing_ai");
+          payload = directPayload;
+          aiHash = onChainHash; // Forced match since we queried Redis directly by the valid Hash
+        } else {
+          // Standard AI processing flow
+          const pending = await stateProvider.getPendingCommand(guestPda);
+          if (!pending) {
+            requestLog.warn("no_pending_command_for_guest_skip");
+            return;
+          }
+
+          const guestContext = buildGuestContext(decodedAccount);
+          const aiResult = await agent.processCommand(
+            pending.userInput,
+            pending.guestContext ?? guestContext
+          );
+          payload = aiResult.payload;
+          aiHash = aiResult.hash;
+        }
 
         if (!aiHash.equals(onChainHash)) {
           requestLog.error(
@@ -130,9 +145,13 @@ export function startSecureGatewayListener(): number {
           await stateProvider.clearPendingCommand(guestPda);
         });
 
-        const audioBuffer = await agent.speak(payload.raw_response);
-        fs.writeFileSync(audioPath, audioBuffer);
-        requestLog.info({ path: audioPath }, "voice_feedback_written");
+        if (payload.raw_response) {
+          const audioBuffer = await agent.speak(payload.raw_response);
+          fs.writeFileSync(audioPath, audioBuffer);
+          requestLog.info({ path: audioPath }, "voice_feedback_written");
+        } else {
+          requestLog.info("no_raw_response_skip_voice");
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         requestLog.error({ err: message }, "secure_gateway_processing_error");

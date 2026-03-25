@@ -33,4 +33,9 @@ export interface IStateProvider {
 
   // Audit trail for validated hash-lock decisions.
   setValidatedState(state: ValidatedState): Promise<void>;
+
+  // Direct payload staging (Web2 JSON cache bypassing AI inference).
+  setDirectPayload(hashHex: string, payload: any): Promise<void>;
+  getDirectPayload(hashHex: string): Promise<any | null>;
+  clearDirectPayload(hashHex: string): Promise<void>;
 }

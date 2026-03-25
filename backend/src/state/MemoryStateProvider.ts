@@ -34,5 +34,24 @@ export class MemoryStateProvider implements IStateProvider {
   async setValidatedState(state: ValidatedState): Promise<void> {
     this.validated.set(state.guestPda, state);
   }
+
+  // -------------------------------------------------------------
+  // Web2.5 Bypassing Logic (High-Speed Channel)
+  // For UI explicit commands, we store the pre-verified JSON to
+  // omit language model halllucination risks + latency.
+  // -------------------------------------------------------------
+  private readonly directPayloads = new Map<string, any>();
+
+  async setDirectPayload(hashHex: string, payload: any): Promise<void> {
+    this.directPayloads.set(hashHex, payload);
+  }
+
+  async getDirectPayload(hashHex: string): Promise<any | null> {
+    return this.directPayloads.get(hashHex) ?? null;
+  }
+
+  async clearDirectPayload(hashHex: string): Promise<void> {
+    this.directPayloads.delete(hashHex);
+  }
 }
 

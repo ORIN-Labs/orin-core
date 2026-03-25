@@ -68,17 +68,22 @@ async function runSimulation() {
     console.log(`[2/3] 🌐 PRE-FLIGHT (Web2): Sending secure JSON to Off-Chain Backend Server...`);
     
     // Send standard HTTPS POST bypassing Blockspace
-    const res = await fetch("http://127.0.0.1:3001/api/preferences", {
+    const res = await fetch("http://127.0.0.1:3001/api/v1/preferences", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-api-key": process.env.API_KEY || "orin_secret_key_2026_dev"
+        },
         body: newPreferencesRaw
     });
 
     const offChainResponse = await res.json();
     console.log(`✅ Success! Backend cached payload with Identity Hash: ${offChainResponse.hash}\n`);
 
-    // Only hash hits the Blockchain
-    const onChainHashLogBuffer = createHash("sha256").update(newPreferencesRaw.trim()).digest();
+    // Only hash hits the Blockchain. 
+    // We use the Canonical Hash returned by the backend's `generateSha256Hash` 
+    // to strictly align with the Web2.5 Hash-Lock mechanism.
+    const onChainHashLogBuffer = Buffer.from(offChainResponse.hash, 'hex');
 
     console.log(`[3/3] 🎛️ FINAL LOCK: Sending HASH-ONLY State Validation to ${NETWORK}...`);
     const tx2 = await program.methods

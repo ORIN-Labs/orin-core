@@ -54,4 +54,21 @@ export class RedisStateProvider implements IStateProvider {
     // 24 hour TTL keeps recent audit records while controlling memory growth.
     await this.redis.set(`orin:validated:${state.guestPda}`, JSON.stringify(state), "EX", 86400);
   }
+
+  async setDirectPayload(hashHex: string, payload: any): Promise<void> {
+    // Store exact frontend-computed JSON object. Short TTL because it should be processed soon.
+    await this.redis.set(`orin:direct_payload:${hashHex}`, JSON.stringify(payload), "EX", 3600);
+  }
+
+  async getDirectPayload(hashHex: string): Promise<any | null> {
+    const raw = await this.redis.get(`orin:direct_payload:${hashHex}`);
+    if (!raw) {
+      return null;
+    }
+    return JSON.parse(raw);
+  }
+
+  async clearDirectPayload(hashHex: string): Promise<void> {
+    await this.redis.del(`orin:direct_payload:${hashHex}`);
+  }
 }
