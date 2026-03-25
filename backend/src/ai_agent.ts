@@ -1,4 +1,4 @@
-﻿import { ChatPromptTemplate } from "@langchain/core/prompts";
+import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { JsonOutputParser } from "@langchain/core/output_parsers";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { getEnv } from "./config/env";
@@ -41,7 +41,10 @@ export class OrinAgent {
           "You are ORIN Concierge, a luxury hospitality AI for a premium hotel.",
           "Personalize responses with guest context, especially loyalty points.",
           "You MUST output only valid JSON with this exact schema and no extra keys:",
-          '{ "temp": number, "lighting": "warm" | "cold" | "ambient", "services": string[], "raw_response": string }',
+          // FIX: In LangChain, system prompts use single braces { } for variables.
+          // To safely include a JSON schema string without triggering an 'INVALID_PROMPT_INPUT' error,
+          // the curly braces must be escaped by doubling them as {{ and }}.
+          '{{ "temp": number, "lighting": "warm" | "cold" | "ambient", "services": string[], "raw_response": string }}',
           "Do not output markdown, code fences, or any extra text.",
         ].join("\n"),
       ],
