@@ -11,7 +11,8 @@ import { Program, AnchorProvider, Idl } from "@coral-xyz/anchor";
 import { deriveGuestPda } from "@/lib/pda";
 import { getConnection } from "@/lib/solana";
 import {
-  savePreferences,
+  saveVoicePreferences,
+  saveManualPreferences,
   RoomPreferences,
   SavePreferencesResult,
 } from "@/lib/savePreferences";
@@ -40,6 +41,11 @@ export default function RoomControl() {
   const [saveResult, setSaveResult] = useState<SavePreferencesResult | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [guestEmail, setGuestEmail] = useState("");
+
+  // Voice AI States
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessingVoice, setIsProcessingVoice] = useState(false);
+  const [voiceInputText, setVoiceInputText] = useState("");
 
   const applyMode = useCallback((mode: RoomMode) => {
     const p = MODE_PRESETS[mode];
@@ -72,15 +78,7 @@ export default function RoomControl() {
 
       const guestContext: GuestContext = { name: guestEmail.split("@")[0], loyaltyPoints: 0, history: [] };
 
-      // FIX: Previously, we sent a generic command (`Set room to ${activeMode} mode`) to the backend.
-      // This caused the AI to hallucinate random values (e.g., guessing 23°C instead of 21°C),
-      // which resulted in the backend's AI Hash never matching the frontend's local Hash-Lock.
-      // By passing `preferences.raw_response` as the exact instruction, we force the AI to output
-      // the exact JSON properties that the frontend used for the local hash.
-      // Delete the following line:
-      //const result = await savePreferences(program, pda, publicKey, `Set room to ${activeMode || "custom"} mode`, preferences, guestContext);
-      const exactCommand = preferences.raw_response; 
-      const result = await savePreferences(program, pda, publicKey, exactCommand, preferences, guestContext);
+      const result = await saveManualPreferences(program, pda, publicKey, preferences, guestContext);
 
       setSaveResult(result);
     } catch (err: any) {
@@ -89,6 +87,49 @@ export default function RoomControl() {
       setIsSaving(false);
     }
   }, [anchorWallet, publicKey, guestEmail, temperature, brightness, lightColor, lightingType, activeMode]);
+
+  const handleVoiceToggle = useCallback(async () => {
+    if (!anchorWallet || !publicKey || !guestEmail) {
+      setSaveError("Connect wallet and enter guest email to use Voice AI.");
+      return;
+    }
+    
+    if (isRecording) {
+      // Stop recording and process
+      setIsRecording(false);
+      setIsProcessingVoice(true);
+      setSaveError(null);
+      setSaveResult(null);
+
+      try {
+        const connection = getConnection();
+        const provider = new AnchorProvider(connection, anchorWallet, { commitment: "confirmed" });
+        const program = new Program(idl as Idl, provider);
+        const { pda } = deriveGuestPda(guestEmail);
+        
+        // Use the current manual settings for the hash-lock fallback, or whatever the UI has
+        const preferences: RoomPreferences = {
+          temp: temperature,
+          lighting: lightingType,
+          services: [],
+          raw_response: "Voice command processed",
+        };
+        const guestContext: GuestContext = { name: guestEmail.split("@")[0], loyaltyPoints: 0, history: [] };
+
+        const command = voiceInputText.trim() || "Set room to relax mode";
+        const result = await saveVoicePreferences(program, pda, publicKey, command, preferences, guestContext);
+        setSaveResult(result);
+      } catch (err: any) {
+        setSaveError(err.message || "Voice AI failed.");
+      } finally {
+        setIsProcessingVoice(false);
+      }
+    } else {
+      // Start recording
+      setIsRecording(true);
+      setVoiceInputText("Set room to relax mode"); // Mocking transcription for MVP
+    }
+  }, [anchorWallet, publicKey, guestEmail, temperature, lightingType, isRecording, voiceInputText]);
 
   return (
     <div style={{ width: "100%", maxWidth: 640, margin: "0 auto" }}>
@@ -191,13 +232,48 @@ export default function RoomControl() {
         </div>
       </div>
 
-      {/* ── Save Button ────────────────── */}
-      <div className="fade-up fade-up-d4" style={{ marginTop: 32, marginBottom: 24 }}>
+      {/* ── Actions (Voice & Save) ───────── */}
+      <div className="fade-up fade-up-d4" style={{ marginTop: 32, marginBottom: 24, display: 'flex', gap: '16px', flexDirection: 'column' }}>
+        
+        {/* Voice AI Integrator */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', background: 'rgba(201, 168, 76, 0.05)', padding: '16px', border: '1px solid var(--gold-line)' }}>
+          <button 
+            type="button"
+            onClick={handleVoiceToggle} 
+            disabled={isProcessingVoice || !connected || !guestEmail || isSaving}
+            style={{
+              width: 48, height: 48, borderRadius: '50%', border: '1px solid var(--gold)',
+              background: isRecording ? 'var(--danger)' : 'transparent',
+              color: isRecording ? 'var(--white)' : 'var(--gold)',
+              cursor: (isProcessingVoice || !connected || !guestEmail || isSaving) ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.3s'
+            }}
+          >
+            {isRecording ? "⏹" : "🎤"}
+          </button>
+          <div style={{ flex: 1 }}>
+            <div className="control-label" style={{ marginBottom: 4 }}>
+              {isRecording ? "Recording..." : isProcessingVoice ? "Processing Intelligence..." : "Tell ORIN what you want"}
+            </div>
+            {isRecording && <span className="status-dot" style={{ background: 'var(--danger)', boxShadow: '0 0 6px var(--danger)' }}></span>}
+            <input 
+              type="text" 
+              className="orin-input" 
+              style={{ border: 'none', padding: 0, opacity: isRecording ? 1 : 0.5 }} 
+              placeholder="e.g. 'I want to focus, make it cooler'" 
+              value={voiceInputText}
+              onChange={(e) => setVoiceInputText(e.target.value)}
+              disabled={!isRecording}
+            />
+          </div>
+        </div>
+
+        {/* Manual Save Button */}
         <button
           id="save-setup-btn"
           onClick={handleSave}
-          disabled={isSaving || !connected || !guestEmail}
-          className={`btn-primary ${(isSaving || !connected || !guestEmail) ? "btn-disabled" : ""}`}
+          disabled={isSaving || isProcessingVoice || isRecording || !connected || !guestEmail}
+          className={`btn-primary ${(isSaving || isProcessingVoice || isRecording || !connected || !guestEmail) ? "btn-disabled" : ""}`}
         >
           {isSaving ? "Saving to blockchain..." : !connected ? "Connect wallet to save" : !guestEmail ? "Enter guest email to save" : "Save my setup →"}
         </button>

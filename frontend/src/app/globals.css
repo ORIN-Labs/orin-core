@@ -444,3 +444,83 @@ input[type="range"]:focus {
 .wallet-adapter-modal-wrapper {
   font-family: var(--font-serif) !important;
 }
+
+/* ── Dashboard & Profile (from index_template.html) ─────── */
+
+.problem-visual {
+  position: relative;
+  height: 400px;
+  border: 1px solid var(--gold-line);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 48px;
+  background: linear-gradient(135deg, rgba(201, 168, 76, 0.04), transparent);
+}
+
+.screen-header {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--gold);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.screen-title {
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -1px;
+  margin-bottom: 8px;
+}
+
+.screen-sub {
+  font-size: 14px;
+  font-style: italic;
+  color: var(--text-dim);
+  margin-bottom: 20px;
+}
+
+.screen-chips {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.spaces-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 2px;
+}
+
+.space-card {
+  padding: 48px 40px;
+  border: 1px solid rgba(201, 168, 76, 0.08);
+  transition: all 0.3s;
+}
+
+.space-card:hover {
+  border-color: var(--gold-line);
+  background: var(--gold-dim);
+}
+
+.space-card h3 {
+  font-size: 28px;
+  font-weight: 400;
+  letter-spacing: -0.5px;
+  margin-bottom: 12px;
+}
+
+.space-card p {
+  font-size: 16px;
+  font-weight: 300;
+  color: var(--text-dim);
+  line-height: 1.7;
+}
+
+@media (max-width: 768px) {
+  .spaces-grid {
+    grid-template-columns: 1fr;
+  }
+}

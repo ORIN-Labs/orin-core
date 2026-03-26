@@ -24,6 +24,12 @@ export interface VoiceCommandResponse {
   message: string;
 }
 
+export interface ManualPreferencesRequest {
+  guestPda: string;
+  preferences: any; // RoomPreferences
+  guestContext: GuestContext;
+}
+
 /**
  * Backend API base URL.
  * In production this should come from NEXT_PUBLIC_API_URL env var.
@@ -60,6 +66,33 @@ export async function stageVoiceCommand(
     throw new Error(
       `API error (${response.status}): ${errorBody}`
     );
+  }
+
+  return response.json();
+}
+
+/**
+ * Step A (Bypass): Sends raw preferences to the high-speed bypass endpoint.
+ * This skips AI inference for instant (O(ms)) manual UI controls.
+ *
+ * @param payload - The manual preferences request body
+ * @returns Accepted response from the backend
+ */
+export async function stageManualPreferences(
+  payload: ManualPreferencesRequest
+): Promise<VoiceCommandResponse> {
+  const response = await fetch(`${API_BASE}/api/v1/preferences`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": API_KEY,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`API error (${response.status}): ${errorBody}`);
   }
 
   return response.json();
