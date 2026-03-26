@@ -62,6 +62,7 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
     // Because the blockchain Hash-Lock demands the user sign the EXACT payload Hash,
     // we cannot defer AI to the listener. The frontend MUST have the AI's hash to mint the TX.
     const aiResult = await agent.processCommand(userInput, guestContext);
+    console.log("aiResult", aiResult);
     const aiHashHex = aiResult.hash.toString("hex");
 
     // Stage it exactly like a manual bypass payload so the listener just verifies and executes

@@ -96,17 +96,17 @@ export class OrinAgent {
       throw new Error("speak(text) requires non-empty text.");
     }
 
-    const response = await fetch("https://api.deepgram.com/v1/speak", {
+    // Deepgram TTS API: model must be a query param, NOT in the JSON body.
+    // Body accepts ONLY { text } — any extra keys trigger PAYLOAD_ERROR.
+    const ttsUrl = `https://api.deepgram.com/v1/speak?model=${encodeURIComponent(model)}`;
+    const response = await fetch(ttsUrl, {
       method: "POST",
       headers: {
         Authorization: `Token ${apiKey}`,
         "Content-Type": "application/json",
         Accept: "audio/mpeg",
       },
-      body: JSON.stringify({
-        text,
-        model,
-      }),
+      body: JSON.stringify({ text }),
     });
 
     if (!response.ok) {
