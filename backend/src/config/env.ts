@@ -21,7 +21,18 @@ const envSchema = z.object({
   STATE_PROVIDER: z.enum(["redis", "memory"]).default("redis"),
   API_HOST: z.string().min(1).default("0.0.0.0"),
   API_PORT: z.coerce.number().int().positive().default(3001),
-  ALLOWED_ORIGIN: z.string().min(1).default("http://localhost:3000"),
+  /**
+   * Comma-separated list of allowed CORS origins.
+   * Example: "http://localhost:3000,https://orin.network"
+   */
+  ALLOWED_ORIGIN: z
+    .string()
+    .min(1)
+    .default("http://localhost:3000")
+    .refine(
+      (val) => val.split(",").every((o) => o.trim().startsWith("http")),
+      { message: "Each entry in ALLOWED_ORIGIN must start with http or https" }
+    ),
   API_KEY: z.string().min(1).default("replace_with_a_secure_api_key"),
 });
 
@@ -42,4 +53,13 @@ export function getEnv(): ParsedEnv {
 
   cachedEnv = parsed.data;
   return cachedEnv;
+}
+
+/**
+ * Returns the ALLOWED_ORIGIN env var as a deduplicated string array.
+ * Trims whitespace from each entry.
+ */
+export function getAllowedOrigins(): string[] {
+  const raw = getEnv().ALLOWED_ORIGIN;
+  return [...new Set(raw.split(",").map((o) => o.trim()))];
 }

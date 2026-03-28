@@ -1,10 +1,10 @@
 import Fastify from "fastify";
-import cors from "@fastify/cors";
+import cors, { type FastifyCorsOptions } from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import { createClient } from "@deepgram/sdk";
 import { Connection } from "@solana/web3.js";
 import { validateEnvOrExit } from "../config/validate_env";
-import { getEnv } from "../config/env";
+import { getEnv, getAllowedOrigins } from "../config/env";
 import { stateProvider } from "../state";
 import { createRequestLogger, logger } from "../shared/logger";
 import { GuestContext, OrinAgent } from "../ai_agent";
@@ -36,10 +36,60 @@ type VoiceCommandBody = {
   guestContext: GuestContext;
 };
 
+// ---------------------------------------------------------------------------
+// CORS — Production-grade configuration
+// ---------------------------------------------------------------------------
+// ALLOWED_ORIGIN supports a comma-separated list of origins so this config
+// works identically in local dev and production without code changes.
+// The origin validator uses a Set for O(1) lookup regardless of list size.
+// ---------------------------------------------------------------------------
+const allowedOrigins = new Set(getAllowedOrigins());
+
+/** HTTP methods exposed on every route */
+const ALLOWED_METHODS: string[] = ["GET", "POST", "OPTIONS"];
+
+/**
+ * Request headers the client is permitted to send.
+ * Must explicitly list every non-CORS-safe header the frontend uses.
+ */
+const ALLOWED_HEADERS: string[] = [
+  "Content-Type",
+  "Authorization",
+  "X-API-KEY",
+  "X-Request-ID",
+];
+
+/**
+ * Response headers the browser is allowed to read from JavaScript.
+ * Expose only what the frontend actually needs to inspect.
+ */
+const EXPOSED_HEADERS: string[] = ["X-Request-ID"];
+
 const app = Fastify({ logger: false });
-app.register(cors, {
-  origin: env.ALLOWED_ORIGIN,
-});
+
+const corsOptions: FastifyCorsOptions = {
+  /**
+   * Dynamic origin validator.
+   * Returns `true` to echo the origin back (required for credentialed requests);
+   * returns `false` to reject. Falls back to `true` for server-to-server requests
+   * that carry no Origin header (e.g. curl health checks, Railway probe).
+   */
+  origin: (origin: string | undefined, cb: (err: Error | null, allow: boolean) => void) => {
+    // Allow server-to-server requests that carry no Origin header (e.g. curl, health checks).
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.has(origin)) return cb(null, true);
+    cb(new Error(`CORS: origin '${origin}' is not permitted.`), false);
+  },
+  methods: ALLOWED_METHODS,
+  allowedHeaders: ALLOWED_HEADERS,
+  exposedHeaders: EXPOSED_HEADERS,
+  credentials: true,              // Required if the frontend ever sends cookies / auth headers.
+  maxAge: 86_400,                 // Cache preflight for 24 h — eliminates per-request OPTIONS round-trips.
+  preflight: true,                // Fastify handles OPTIONS automatically.
+  strictPreflight: false,         // Be lenient: non-preflight OPTIONS still succeed.
+};
+
+app.register(cors, corsOptions);
 // Replaces Express 'multer.memoryStorage()' with Fastify's high-speed equivalent
 app.register(multipart, {
   limits: {
