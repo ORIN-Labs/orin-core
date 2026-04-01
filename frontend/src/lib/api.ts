@@ -174,3 +174,35 @@ export async function relayTransaction(serializedTx: string): Promise<RelayRespo
 
   return response.json();
 }
+
+
+/**
+ * Fast Voice Feedback (Low-Latency TTS)
+ * Generates an instant audio response from the LLM, useful for masking
+ * the delay while a blockchain transaction completes in the background.
+ */
+export async function fetchFastVoiceReply(payload: {
+  userInput: string;
+  guestContext?: GuestContext;
+  deviceId?: string;
+}): Promise<{
+  status: string;
+  mimeType: string;
+  audioBase64: string;
+}> {
+  const response = await fetch(`${API_BASE}/api/v1/voice-fast`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": API_KEY,
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Fast Voice API error (${response.status}): ${errorBody}`);
+  }
+
+  return response.json();
+}

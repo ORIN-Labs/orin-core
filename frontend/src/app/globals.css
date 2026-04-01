@@ -1,526 +1,117 @@
-/* ── ORIN Design System ─────────────────────────────
- * Derived from docs/index_template.html
- * Fonts: Cormorant Garamond (serif) + DM Mono (mono)
- * Palette: Gold #C9A84C on Black #080808
- *
- * NOTE: No Tailwind import — pure CSS to match
- * the template exactly without preflight conflicts.
- * ─────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Outfit:wght@100..900&display=swap');
+@import "tailwindcss";
 
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400;1,600&family=DM+Mono:wght@300;400;500&display=swap');
-
-:root {
-  --gold: #C9A84C;
-  --gold-dim: rgba(201, 168, 76, 0.15);
-  --gold-line: rgba(201, 168, 76, 0.25);
-  --white: #F5F0E8;
-  --black: #080808;
-  --text-dim: rgba(245, 240, 232, 0.45);
-  --success: #10b981;
-  --danger: #ef4444;
-
-  --font-serif: 'Cormorant Garamond', serif;
-  --font-mono: 'DM Mono', monospace;
+@theme {
+  --color-background: #332F2E;
+  --color-card: #3f3b3a;
+  --color-card-hover: #4a4645;
+  --color-accent: #C4A97A;
+  --color-accent-light: #FFE0B2;
+  --color-accent-muted: #80663C;
+  --color-border: #4d4948;
+  --color-text-secondary: #a1a1aa;
+  --font-serif: "Outfit", sans-serif;
+  --font-mono: "Inter", sans-serif;
 }
 
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@layer base {
+  body {
+    @apply bg-background text-white font-serif antialiased;
+  }
 }
 
-html {
-  scroll-behavior: smooth;
-  height: 100%;
+@utility accent-glow {
+  box-shadow: 0 0 20px rgba(196, 169, 122, 0.15);
 }
 
-body {
-  background: var(--black);
-  color: var(--white);
-  font-family: var(--font-serif);
-  overflow-x: hidden;
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer components {
+  .glass-card {
+    @apply bg-card border border-border rounded-2xl overflow-hidden;
+  }
+
+  .accent-button {
+    @apply bg-accent text-black font-medium py-3 px-6 rounded-xl transition-all hover:scale-[1.02] active:scale-[0.98] accent-glow;
+  }
+
+  .secondary-button {
+    @apply bg-card border border-border text-white font-medium py-3 px-6 rounded-xl transition-all hover:bg-card-hover;
+  }
+
+  @keyframes marquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .animate-marquee {
+    animation: marquee 30s linear infinite;
+  }
+
+  @keyframes shimmer {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(100%); }
+  }
+
+  .animate-shimmer {
+    animation: shimmer 2s infinite;
+  }
+
+  @keyframes glitch {
+    0% { transform: translate(0); }
+    20% { transform: translate(-2px, 2px); }
+    40% { transform: translate(-2px, -2px); }
+    60% { transform: translate(2px, 2px); }
+    80% { transform: translate(2px, -2px); }
+    100% { transform: translate(0); }
+  }
+
+  .animate-glitch {
+    animation: glitch 0.3s infinite;
+  }
 }
 
-/* ── Navigation ──────────────────────────────────── */
-
-.nav {
-  padding: 28px 60px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid rgba(201, 168, 76, 0.1);
-}
-
-.nav-logo {
-  font-family: var(--font-serif);
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.5px;
-  color: var(--white);
-}
-
-.nav-logo span {
-  color: var(--gold);
-}
-
-/* ── Section Labels (DM Mono uppercase) ──────────── */
-
-.section-label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 4px;
-  text-transform: uppercase;
-  color: var(--gold);
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.section-label::after {
-  content: '';
-  flex: 1;
-  max-width: 60px;
-  height: 1px;
-  background: var(--gold-line);
-}
-
-/* ── Cards ───────────────────────────────────────── */
-
-.orin-card {
-  padding: 40px;
-  border: 1px solid var(--gold-line);
-  background: linear-gradient(135deg, rgba(201, 168, 76, 0.04), transparent);
-  margin-bottom: 2px;
-}
-
-/* ── Chips (mode selectors) ──────────────────────── */
-
-.chip {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 1px;
-  padding: 12px 16px;
-  border: 1px solid var(--gold-line);
-  color: var(--text-dim);
-  cursor: pointer;
-  transition: all 0.3s;
-  text-transform: uppercase;
-  background: transparent;
-  text-align: center;
-}
-
-.chip:hover {
-  border-color: var(--gold);
-  color: var(--gold);
-}
-
-.chip-active {
-  border-color: var(--gold) !important;
-  color: var(--gold) !important;
-  background: var(--gold-dim) !important;
-}
-
-.chip-desc {
-  display: block;
-  font-size: 9px;
-  opacity: 0.6;
-  margin-top: 4px;
-  letter-spacing: 0.5px;
-}
-
-/* ── Buttons ─────────────────────────────────────── */
-
-.btn-primary {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--black);
-  background: var(--gold);
-  padding: 16px 36px;
-  text-decoration: none;
-  display: inline-block;
-  border: none;
-  cursor: pointer;
-  transition: all 0.3s;
-  width: 100%;
-  text-align: center;
-}
-
-.btn-primary:hover {
-  box-shadow: 0 0 24px rgba(201, 168, 76, 0.3);
-}
-
-.btn-disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
-/* ── Form Controls ───────────────────────────────── */
-
-.control-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-.control-value {
-  font-family: var(--font-mono);
-  font-size: 14px;
-  color: var(--gold);
-  letter-spacing: 1px;
-}
-
-.control-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  margin-bottom: 10px;
-}
-
-.orin-input {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  letter-spacing: 1px;
-  background: transparent;
-  border: 1px solid var(--gold-line);
-  color: var(--white);
-  padding: 14px 16px;
-  width: 100%;
-  outline: none;
-  transition: border-color 0.3s;
-}
-
-.orin-input:focus {
-  border-color: var(--gold);
-}
-
-.orin-input::placeholder {
-  color: var(--text-dim);
-}
-
-/* Range sliders */
-input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  background: transparent;
-  cursor: pointer;
-  width: 100%;
-  height: 24px;
-}
-
-input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  background: rgba(201, 168, 76, 0.2);
-  border: 1px solid rgba(201, 168, 76, 0.3);
-}
-
-input[type="range"]::-moz-range-track {
-  height: 4px;
-  background: rgba(201, 168, 76, 0.2);
-  border: 1px solid rgba(201, 168, 76, 0.3);
-}
-
-input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 18px;
-  width: 18px;
-  border-radius: 0;
-  background: var(--gold);
-  margin-top: -8px;
-  box-shadow: 0 0 8px rgba(201, 168, 76, 0.3);
-  transition: box-shadow 0.2s ease, transform 0.15s ease;
-}
-
-input[type="range"]::-moz-range-thumb {
-  height: 18px;
-  width: 18px;
-  border-radius: 0;
-  background: var(--gold);
-  border: none;
-  box-shadow: 0 0 8px rgba(201, 168, 76, 0.3);
-}
-
-input[type="range"]::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 16px rgba(201, 168, 76, 0.6);
-  transform: scale(1.1);
-}
-
-input[type="range"]::-moz-range-progress {
-  height: 4px;
-  background: var(--gold);
-}
-
-input[type="range"]:focus {
-  outline: none;
-}
-
-/* Color picker */
-.color-picker {
-  -webkit-appearance: none;
-  appearance: none;
-  border: 1px solid var(--gold-line);
-  background: transparent;
-  width: 100%;
-  height: 36px;
-  cursor: pointer;
-  padding: 2px;
-}
-
-.color-picker::-webkit-color-swatch-wrapper {
-  padding: 0;
-}
-
-.color-picker::-webkit-color-swatch {
-  border: none;
-}
-
-/* ── Status Feedback ─────────────────────────────── */
-
-.status-success {
-  border: 1px solid var(--success);
-  padding: 24px;
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.04), transparent);
-  margin-bottom: 16px;
-}
-
-.status-error {
-  border: 1px solid var(--danger);
-  padding: 24px;
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.04), transparent);
-  margin-bottom: 16px;
-}
-
-.status-dot {
-  display: inline-block;
+/* Custom scrollbar */
+::-webkit-scrollbar {
   width: 6px;
-  height: 6px;
-  background: var(--success);
-  box-shadow: 0 0 6px var(--success);
-  animation: pulse-dot 2s infinite;
-  vertical-align: middle;
-  margin-right: 10px;
 }
 
-@keyframes pulse-dot {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+::-webkit-scrollbar-track {
+  @apply bg-background;
 }
 
-.status-label {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--success);
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
 }
 
-.status-detail {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: var(--text-dim);
-  line-height: 2.2;
-  letter-spacing: 1px;
-  margin-top: 12px;
-}
+/* No scrollbar utility */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* ── Animations ──────────────────────────────────── */
-
-@keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(30px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.fade-up {
-  opacity: 0;
-  animation: fadeUp 0.8s ease forwards;
-}
-
-.fade-up-d1 { animation-delay: 0.1s; }
-.fade-up-d2 { animation-delay: 0.2s; }
-.fade-up-d3 { animation-delay: 0.3s; }
-.fade-up-d4 { animation-delay: 0.4s; }
-.fade-up-d5 { animation-delay: 0.5s; }
-
-/* ── Footer ──────────────────────────────────────── */
-
-.orin-footer {
-  padding: 40px 60px;
-  border-top: 1px solid rgba(201, 168, 76, 0.1);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 20px;
-}
-
-.footer-meta {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
-.footer-copy {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 1px;
-  color: rgba(245, 240, 232, 0.2);
-}
-
-/* ── Hint text ───────────────────────────────────── */
-
-.hint-text {
-  text-align: center;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 2px;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  margin-top: 16px;
-}
-
-/* ── Page background glow ────────────────────────── */
-
-.page-glow {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse 80% 60% at 50% 30%, rgba(201, 168, 76, 0.04) 0%, transparent 65%);
-  pointer-events: none;
-}
-
-/* ── Responsive ──────────────────────────────────── */
-
-@media (max-width: 768px) {
-  .nav {
-    padding: 20px 24px;
-  }
-
-  .orin-card {
-    padding: 24px 20px;
-  }
-
-  .orin-footer {
-    padding: 24px;
-    flex-direction: column;
-    align-items: flex-start;
-  }
-}
-
-/* ── Wallet adapter overrides ────────────────────── */
-
+/* Wallet adapter button overrides — gold theme */
 .wallet-adapter-button {
-  font-family: var(--font-mono) !important;
+  font-family: "Inter", sans-serif !important;
   font-size: 11px !important;
-  letter-spacing: 2px !important;
+  letter-spacing: 1.5px !important;
   text-transform: uppercase !important;
-  background: var(--gold) !important;
-  color: var(--black) !important;
-  border-radius: 0 !important;
+  background: #C4A97A !important;
+  color: #332F2E !important;
+  border-radius: 12px !important;
   height: auto !important;
-  padding: 10px 24px !important;
+  padding: 10px 20px !important;
   line-height: 1 !important;
+  font-weight: 600 !important;
+  transition: all 0.3s !important;
 }
 
 .wallet-adapter-button:hover {
-  background: var(--gold) !important;
-  box-shadow: 0 0 16px rgba(201, 168, 76, 0.3) !important;
+  background: #FFE0B2 !important;
+  box-shadow: 0 0 20px rgba(196, 169, 122, 0.3) !important;
 }
 
 .wallet-adapter-modal-wrapper {
-  font-family: var(--font-serif) !important;
+  font-family: "Outfit", sans-serif !important;
 }
 
-/* ── Dashboard & Profile (from index_template.html) ─────── */
-
-.problem-visual {
-  position: relative;
-  height: 400px;
-  border: 1px solid var(--gold-line);
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 48px;
-  background: linear-gradient(135deg, rgba(201, 168, 76, 0.04), transparent);
-}
-
-.screen-header {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 3px;
-  color: var(--gold);
-  text-transform: uppercase;
-  margin-bottom: 12px;
-}
-
-.screen-title {
-  font-size: 32px;
-  font-weight: 600;
-  letter-spacing: -1px;
-  margin-bottom: 8px;
-}
-
-.screen-sub {
-  font-size: 14px;
-  font-style: italic;
-  color: var(--text-dim);
-  margin-bottom: 20px;
-}
-
-.screen-chips {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 20px;
-}
-
-.spaces-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 2px;
-}
-
-.space-card {
-  padding: 48px 40px;
-  border: 1px solid rgba(201, 168, 76, 0.08);
-  transition: all 0.3s;
-}
-
-.space-card:hover {
-  border-color: var(--gold-line);
-  background: var(--gold-dim);
-}
-
-.space-card h3 {
-  font-size: 28px;
-  font-weight: 400;
-  letter-spacing: -0.5px;
-  margin-bottom: 12px;
-}
-
-.space-card p {
-  font-size: 16px;
-  font-weight: 300;
-  color: var(--text-dim);
-  line-height: 1.7;
-}
-
-@media (max-width: 768px) {
-  .spaces-grid {
-    grid-template-columns: 1fr;
-  }
+.wallet-adapter-modal-title {
+  font-family: "Outfit", sans-serif !important;
+  font-weight: 600 !important;
 }
