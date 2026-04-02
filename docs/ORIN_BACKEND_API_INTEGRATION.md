@@ -1,5 +1,7 @@
 # ORIN Backend API Integration Guide
 
+> ⚠️ **IMPORTANT UPDATE (2026-04):** We have made structural changes to API schemas to correctly support Hash-Lock caching. If your frontend transactions are failing with `AccountNotInitialized`, please read the critical fix required in your Solana relay logic here: [Frontend Lazy Init Task](./FRONTEND_TASK_LAZY_INIT.md)
+
 This document outlines the frontend integration with the ORIN production backend. The backend acts as the AI Gateway, orchestrating voice processing, LLM inference, caching, direct bypass mechanisms, and Solana transaction relayer.
 
 ## Global Requirements
@@ -34,6 +36,12 @@ Used when a user speaks a command. The backend uses the AI agent to parse the in
   "status": "accepted",
   "guestPda": "EP1c... (same as input)",
   "hash": "a1b2c3d4e5f6... (hex-encoded SHA-256 string)",
+  "aiResult": {
+    "temp": 68,
+    "lighting": "ambient",
+    "services": [],
+    "raw_response": "Temperature reduced to 68 degrees."
+  },
   "message": "Command parsed by AI. Awaiting on-chain hash-lock validation."
 }
 ```
@@ -43,12 +51,20 @@ Used when a user speaks a command. The backend uses the AI agent to parse the in
 Used when a user manually interacts with the UI (e.g., using a slider to change the temperature). It bypasses the AI inference, calculates the deterministic hash, stages it in Redis, and returns the hash for transaction signing.
 
 - **Endpoint**: `POST /api/v1/preferences`
-- **Request Body**: *(Any valid JSON payload that conforms to the expected on-chain state)*
+- **Request Body**:
 ```json
 {
-  "temp": 68,
-  "lighting": "ambient",
-  "services": []
+  "guestPda": "EP1c... (Base58 Pubkey string)",
+  "brightness": 80, 
+  "preferences": {
+    "temp": 68,
+    "lighting": "ambient",
+    "services": []
+  },
+  "guestContext": {
+    "name": "John Doe",
+    "history": []
+  }
 }
 ```
 - **Response** `(200 OK)`:
@@ -98,6 +114,7 @@ An additive endpoint used to fetch highly-optimized TTS audio (sub-second latenc
   "status": "ok",
   "mimeType": "audio/mpeg",
   "audioBase64": "SUQzBAAAAAAAI1RTU0Uy... (Base64 MP3 Audio)",
+  "text": "Dame un segundo y lo resuelvo.",
   "latencyMs": {
     "llm": 120,
     "tts": 230,

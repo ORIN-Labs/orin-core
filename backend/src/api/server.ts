@@ -85,6 +85,60 @@ const EXPOSED_HEADERS: string[] = ["X-Request-ID"];
 
 const app = Fastify({ logger: false });
 
+// ---------------------------------------------------------------------------
+// Production Logging Interceptors
+// ---------------------------------------------------------------------------
+// Injects a per-request logger into Fastify and logs detailed payload info.
+// This provides complete visibility into frontend-backend data exchange while
+// automatically skipping heavy binary/base64 log pollution.
+// ---------------------------------------------------------------------------
+declare module "fastify" {
+  interface FastifyRequest {
+    reqLogger: ReturnType<typeof createRequestLogger>;
+  }
+}
+
+app.addHook("onRequest", async (request, reply) => {
+  // 1. Inject a context-aware logger early in the request lifecycle
+  request.reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+});
+
+app.addHook("preHandler", async (request, reply) => {
+  // 2. Log exactly what the frontend sends (the raw Request Body)
+  if (request.url.includes("/transcribe") || request.url.includes("/stt-stream")) {
+    request.reqLogger.info({ method: request.method, url: request.url }, "==> [FRONTEND -> BACKEND] API Request (Multipart/Stream omitted)");
+  } else {
+    request.reqLogger.info({ 
+      method: request.method, 
+      url: request.url, 
+      body: request.body 
+    }, "==> [FRONTEND -> BACKEND] API Request");
+  }
+});
+
+app.addHook("onSend", async (request, reply, payload) => {
+  // 3. Log exactly what the backend returns to the frontend (the Response Body)
+  // Masking large base64 outputs to prevent log flooding
+  let safePayload = payload;
+  try {
+    if (typeof payload === "string" && payload.startsWith("{")) {
+      const parsed = JSON.parse(payload);
+      if (parsed.audioBase64) parsed.audioBase64 = "[TRUNCATED_AUDIO_BASE64]";
+      if (parsed.transaction) parsed.transaction = "[TRUNCATED_TX_BASE64]";
+      safePayload = parsed;
+    }
+  } catch (e) {
+    // If parsing fails, fall back to string payload
+  }
+
+  request.reqLogger.info({ 
+    method: request.method, 
+    url: request.url, 
+    statusCode: reply.statusCode,
+    response: safePayload
+  }, "<== [BACKEND -> FRONTEND] API Response");
+});
+
 const corsOptions: FastifyCorsOptions = {
   /**
    * Dynamic origin validator.
@@ -125,7 +179,7 @@ app.register(websocket);
 // ---------------------------------------------------------------------------
 const VOICE_CACHE_TTL_MS = 10 * 60 * 1000;
 const TTS_CACHE_TTL_MS = 10 * 60 * 1000;
-const ACK_TEXT = "Dame un segundo y lo resuelvo.";
+const ACK_TEXT = "Got it, processing your request now.";
 const voiceCache = new Map<string, VoiceFastCached>();
 const ttsCache = new Map<string, VoiceFastCached>();
 
@@ -234,7 +288,7 @@ function createDeepgramSocket(): WebSocket {
 }
 
 app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, reply) => {
-  const reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+  const reqLogger = request.reqLogger;
 
   // Production Auth Check
   const apiKey = request.headers["x-api-key"];
@@ -258,7 +312,6 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
     // we cannot defer AI to the listener. The frontend MUST have the AI's hash to mint the TX.
     const aiResult = await agent.processCommand(userInput, guestContext);
     const aiHashHex = aiResult.hash.toString("hex");
-
     // Stage it exactly like a manual bypass payload so the listener just verifies and executes
     await stateProvider.setDirectPayload(aiHashHex, aiResult.payload);
     reqLogger.info({ guest_pda: guestPda, hash: aiHashHex }, "ai_command_resolved_and_staged");
@@ -267,6 +320,7 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
       status: "accepted",
       guestPda,
       hash: aiHashHex, // Send this critical piece to the frontend!
+      aiResult: aiResult.payload, // Returned so frontend can see/preview the LLM's structured output
       message: "Command parsed by AI. Awaiting on-chain hash-lock validation.",
     });
   } catch (error: any) {
@@ -282,8 +336,15 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
  * AI inference. Receives explicit JSON, computes the canonical hash,
  * and caches it directly in Redis awaiting Solana confirmation.
  */
-app.post<{ Body: Record<string, unknown> }>("/api/v1/preferences", async (request, reply) => {
-  const reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+interface ManualPreferencesBody {
+  guestPda: string;
+  preferences: Record<string, unknown>;
+  guestContext?: GuestContext;
+  brightness?: number; // Optional input parameter
+}
+
+app.post<{ Body: ManualPreferencesBody }>("/api/v1/preferences", async (request, reply) => {
+  const reqLogger = request.reqLogger;
 
   // Production Auth Check: Protect memory exhaust attacks from unauthorized payloads
   const apiKey = request.headers["x-api-key"];
@@ -292,17 +353,24 @@ app.post<{ Body: Record<string, unknown> }>("/api/v1/preferences", async (reques
     return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
   }
 
-  // Ensure payload is an actual object preventing injection or bad formats
-  if (!request.body || typeof request.body !== "object" || Array.isArray(request.body)) {
+  const { guestPda, preferences, guestContext, brightness } = request.body || {};
+
+  // Ensure payload has the correct wrapper and preferences is an actual object
+  if (!guestPda || !preferences || typeof preferences !== "object" || Array.isArray(preferences)) {
     reqLogger.error("invalid_preferences_body");
-    return reply.status(400).send({ error: "Invalid JSON object for preferences." });
+    return reply.status(400).send({ error: "Invalid body. Required: guestPda and preferences object." });
   }
 
-  // Hash the ENTIRE canonical body ? frontend must hash the same full object
-  const hashHex = generateSha256Hash(request.body).toString("hex");
+  // If the frontend explicitly passed an optional brightness value, merge it into the core preferences
+  if (brightness !== undefined) {
+    preferences.brightness = brightness;
+  }
 
-  await stateProvider.setDirectPayload(hashHex, request.body);
-  reqLogger.info({ hash: hashHex }, "direct_payload_stored");
+  // Hash ONLY the preferences canonical body — matching the AI agent output schema
+  const hashHex = generateSha256Hash(preferences).toString("hex");
+
+  await stateProvider.setDirectPayload(hashHex, preferences);
+  reqLogger.info({ guest_pda: guestPda, hash: hashHex }, "direct_payload_stored");
 
   return reply.status(200).send({
     status: "success",
@@ -319,7 +387,7 @@ app.post<{ Body: Record<string, unknown> }>("/api/v1/preferences", async (reques
  * and returns the structured LLM-ready text string.
  */
 app.post("/api/v1/transcribe", async (request, reply) => {
-  const reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+  const reqLogger = request.reqLogger;
 
   // Production Auth Check: Protect costly upstream Deepgram tokens
   const apiKey = request.headers["x-api-key"];
@@ -383,7 +451,7 @@ app.post("/api/v1/transcribe", async (request, reply) => {
  * This endpoint is additive (does not replace the core hash-lock flow).
  */
 app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) => {
-  const reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+  const reqLogger = request.reqLogger;
   const t0 = Date.now();
 
   // Production Auth Check
@@ -416,6 +484,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
         status: "ok",
         mimeType: "audio/mpeg",
         audioBase64: cached.audioBase64,
+        text: cached.text,
         latencyMs: { llm: 0, tts: 0, total: tHit - t0 },
         cached: true,
         ack: false,
@@ -435,6 +504,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
           status: "ok",
           mimeType: "audio/mpeg",
           audioBase64: prebuilt.audioBase64,
+          text: prebuilt.text,
           latencyMs: { llm: 0, tts: 0, total: tHit - t0 },
           cached: true,
           fastIntent: true,
@@ -458,6 +528,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
         status: "ok",
         mimeType: "audio/mpeg",
         audioBase64: payload.audioBase64,
+        text: payload.text,
         latencyMs: { llm: 0, tts: tB - tA, total: tB - t0 },
         cached: false,
         fastIntent: true,
@@ -485,6 +556,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
           const quickText = await agent.generateQuickVoiceReply(userInput, effectiveGuestContext, {
             timeoutMs: env.GROQ_TIMEOUT_BG_MS,
           });
+          reqLogger.info({ quickText }, "quick_text_generated");
           const t2 = Date.now();
           const cachedTts = getTtsCache(ttsKey(quickText));
           const audioBuffer = cachedTts
@@ -524,6 +596,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
         status: "ok",
         mimeType: "audio/mpeg",
         audioBase64: ack.audioBase64,
+        text: ack.text,
         latencyMs: { llm: 0, tts: 0, total: tAck - t0 },
         cached: true,
         fastIntent: false,
@@ -567,6 +640,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
       status: "ok",
       mimeType: "audio/mpeg",
       audioBase64: audioBuffer.toString("base64"),
+      text: quickText,
       latencyMs: { llm: t2 - t1, tts: t3 - t2, total: t3 - t0 },
       cached: false,
       fastIntent: false,
@@ -612,6 +686,7 @@ app.post<{ Body: VoiceTestBody }>("/api/v1/voice-fast", async (request, reply) =
           status: "ok",
           mimeType: "audio/mpeg",
           audioBase64: audioBuffer.toString("base64"),
+          text: fallbackReply,
           latencyMs: { llm: 0, tts: tFallbackEnd - tFallbackStart, total: tFallbackEnd - t0 },
           cached: false,
           fastIntent: Boolean(findFastIntentReply(userInput)),
@@ -769,7 +844,7 @@ app.get("/api/v1/stt-stream", { websocket: true }, (connection: any, req: any) =
  *   - recentBlockhash presence is enforced to block replay attacks.
  */
 app.post<{ Body: { transaction: string } }>("/api/v1/relay", async (request, reply) => {
-  const reqLogger = createRequestLogger(request.headers["x-request-id"] as string | undefined);
+  const reqLogger = request.reqLogger;
 
   // Auth guard
   const apiKey = request.headers["x-api-key"];
