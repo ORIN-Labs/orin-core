@@ -3,16 +3,18 @@ use anchor_lang::prelude::*;
 // Replace this with your actual generated Program ID
 declare_id!("FqtrHgdYTph1DSP9jDYD7xrKPrjSjCTtnw6fyKMmboYk");
 
+pub const ORIN_REWARD_AUTHORITY_PUBKEY: Pubkey = pubkey!("9YHkGPHXQGmp6M7hSam6nCxmQAcKhG5KTr6a3dAacvVC"); // Needs to be swapped to the dedicated reward wallet pubkey!
+
 #[program]
 pub mod orin_identity {
     use super::*;
 
     /// Initializes a new guest identity (On-chain Identity Layer)
-    /// @param email_hash: SHA256 hash of the guest's email, used to derive the PDA
+    /// @param identifier_hash: SHA256 hash of the guest's unique identifier (name, email, uuid), used to derive the PDA
     /// @param name: Guest's name or nickname
     pub fn initialize_guest(
         ctx: Context<InitializeGuest>,
-        email_hash: [u8; 32],
+        identifier_hash: [u8; 32],
         name: String,
     ) -> Result<()> {
         // 1. Parameter validation: Limit name length (Max 100 characters/bytes)
@@ -22,8 +24,8 @@ pub mod orin_identity {
 
         // 2. Initialize fields
         guest_profile.owner     = *ctx.accounts.user.key;      // Bind the guest wallet as the owner
-        guest_profile.authority = *ctx.accounts.fee_payer.key; // Bind the server wallet as the booking authority
-        guest_profile.email_hash = email_hash;           // Store email hash for off-chain querying
+        guest_profile.authority = ORIN_REWARD_AUTHORITY_PUBKEY; // Force the isolated reward pubkey as the exclusive booking authority
+        guest_profile.identifier_hash = identifier_hash;       // Store generic identifier hash for off-chain querying
         guest_profile.name = name;                       // Store guest name
         guest_profile.loyalty_points = 0;                // Initialize ORIN Credits to 0
         guest_profile.stay_count = 0;                    // Initialize booking count to 0
@@ -87,17 +89,17 @@ pub mod orin_identity {
 /// ---------------------------
 
 #[derive(Accounts)]
-#[instruction(email_hash: [u8; 32])]
+#[instruction(identifier_hash: [u8; 32])]
 pub struct InitializeGuest<'info> {
     // PDA (Program Derived Address) design:
-    // Seeds combine "guest" + user's email hash, ensuring one email maps to exactly one identity account
+    // Seeds combine "guest" + identifier + user's wallet pubkey, ensuring absolute uniqueness and locking out malicious squatters
     #[account(
         init,
-        payer = fee_payer,  // Server wallet subsidizes the Rent (~0.0024 SOL) — guest pays nothing
-        // Space: 8 discriminator + 32 owner + 32 authority + 32 email_hash + (4+100) name
+        payer = fee_payer,  // Can be the server (Relayer) or the user themselves in direct-pay mode
+        // Space: 8 discriminator + 32 owner + 32 authority + 32 identifier_hash + (4+100) name
         //      + 32 preferences_hash + 8 loyalty_points + 4 stay_count = 252 bytes
         space = 8 + 32 + 32 + 32 + (4 + 100) + 32 + 8 + 4,
-        seeds = [b"guest", email_hash.as_ref()],
+        seeds = [b"guest", identifier_hash.as_ref(), user.key().as_ref()],
         bump
     )]
     pub guest_profile: Account<'info, GuestIdentity>,
@@ -155,7 +157,7 @@ pub struct RecordBooking<'info> {
 pub struct GuestIdentity {
     pub owner: Pubkey,               // 32 bytes: Account owner (AA context or private key wallet)
     pub authority: Pubkey,           // 32 bytes: ORIN backend server wallet — the only key that may call record_booking
-    pub email_hash: [u8; 32],        // 32 bytes: Associated email hash
+    pub identifier_hash: [u8; 32],   // 32 bytes: Associated generic identifier hash
     pub name: String,                // 4 + 100 bytes: User's name/nickname
     pub preferences_hash: [u8; 32],  // 32 bytes: Security HASH validating the off-chain environment preferences
     pub loyalty_points: u64,         // 8 bytes: ORIN Credits (mapped from loyalty_points for display)

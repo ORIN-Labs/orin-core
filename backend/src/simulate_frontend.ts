@@ -34,13 +34,13 @@ async function runSimulation() {
     const PROGRAM_ID = new PublicKey("FqtrHgdYTph1DSP9jDYD7xrKPrjSjCTtnw6fyKMmboYk");
     const program = new Program(idl as anchor.Idl, provider);
 
-    // Create a unqiue email for this run@orin.network
-    const testEmail = `guest_${Math.floor(Date.now() / 1000)}`;
-    const emailHashBuffer = createHash("sha256").update(testEmail.toLowerCase().trim()).digest();
-    console.log("testEmail", testEmail);
-    // Derive PDA based on the integration spec
+    // Create a unique identifier for this run
+    const testIdentifier = `guest_${Math.floor(Date.now() / 1000)}`;
+    const identifierHashBuffer = createHash("sha256").update(testIdentifier.toLowerCase().trim()).digest();
+    console.log("testIdentifier", testIdentifier);
+    // Derive PDA based on the new hyper-secure integration spec (includes user PubKey)
     const [guestPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("guest"), emailHashBuffer],
+      [Buffer.from("guest"), identifierHashBuffer, wallet.publicKey.toBuffer()],
       PROGRAM_ID
     );
 
@@ -49,7 +49,7 @@ async function runSimulation() {
 
     console.log(`\n[1/3] 📝 Sending InitializeGuest TX to ${NETWORK}...`);
     const tx1 = await program.methods
-      .initializeGuest(Array.from(emailHashBuffer), "Demo Private Guest")
+      .initializeGuest(Array.from(identifierHashBuffer), "Demo Private Guest")
       .accounts({
         guestProfile: guestPda,
         user: wallet.publicKey,
@@ -71,7 +71,7 @@ async function runSimulation() {
         raw_response: ""
       },
       guestContext: {
-        name: testEmail,
+        name: testIdentifier,
         loyaltyPoints: 0,
         history: []
       }

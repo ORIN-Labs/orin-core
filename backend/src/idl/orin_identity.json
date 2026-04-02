@@ -11,7 +11,7 @@
       "name": "initialize_guest",
       "docs": [
         "Initializes a new guest identity (On-chain Identity Layer)",
-        "@param email_hash: SHA256 hash of the guest's email, used to derive the PDA",
+        "@param identifier_hash: SHA256 hash of the guest's unique identifier (name, email, uuid), used to derive the PDA",
         "@param name: Guest's name or nickname"
       ],
       "discriminator": [
@@ -42,7 +42,11 @@
               },
               {
                 "kind": "arg",
-                "path": "email_hash"
+                "path": "identifier_hash"
+              },
+              {
+                "kind": "account",
+                "path": "user"
               }
             ]
           }
@@ -63,7 +67,7 @@
       ],
       "args": [
         {
-          "name": "email_hash",
+          "name": "identifier_hash",
           "type": {
             "array": [
               "u8",
@@ -218,7 +222,7 @@
             "type": "pubkey"
           },
           {
-            "name": "email_hash",
+            "name": "identifier_hash",
             "type": {
               "array": [
                 "u8",

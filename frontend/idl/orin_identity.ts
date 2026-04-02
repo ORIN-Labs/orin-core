@@ -17,7 +17,7 @@ export type OrinIdentity = {
       "name": "initializeGuest",
       "docs": [
         "Initializes a new guest identity (On-chain Identity Layer)",
-        "@param email_hash: SHA256 hash of the guest's email, used to derive the PDA",
+        "@param identifier_hash: SHA256 hash of the guest's unique identifier (name, email, uuid), used to derive the PDA",
         "@param name: Guest's name or nickname"
       ],
       "discriminator": [
@@ -48,7 +48,11 @@ export type OrinIdentity = {
               },
               {
                 "kind": "arg",
-                "path": "emailHash"
+                "path": "identifierHash"
+              },
+              {
+                "kind": "account",
+                "path": "user"
               }
             ]
           }
@@ -69,7 +73,7 @@ export type OrinIdentity = {
       ],
       "args": [
         {
-          "name": "emailHash",
+          "name": "identifierHash",
           "type": {
             "array": [
               "u8",
@@ -224,7 +228,7 @@ export type OrinIdentity = {
             "type": "pubkey"
           },
           {
-            "name": "emailHash",
+            "name": "identifierHash",
             "type": {
               "array": [
                 "u8",

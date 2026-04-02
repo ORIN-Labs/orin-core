@@ -24,8 +24,10 @@ const tx = new Transaction({ recentBlockhash: blockhash, feePayer: opts!.feePaye
 
 // Lazy Init
 if (!accountInfo) {
+  // CRITICAL: PDA Seed now MUST include ownerPubkey to prevent squatting attacks
+  // const [guestPda] = PublicKey.findProgramAddressSync([Buffer.from("guest"), identifierHash, ownerPubkey.toBuffer()], programId);
   const initIx = await program.methods
-    .initializeGuest(Array.from(emailHash), guestName)
+    .initializeGuest(Array.from(identifierHash), guestName)
     .accounts({
       guestProfile: guestPda,
       user: ownerPubkey,
@@ -44,7 +46,7 @@ const updateIx = await program.methods
 tx.add(updateIx);
 // ... proceed to sign and relay ...
 ```
-*(Note: You will need to pass `emailHash` and `guestName` from the UI layer into `updatePreferencesOnChain` to support the creation flow.)*
+*(Note: You will need to physically pass `identifierHash` and `guestName` from the UI layer into `updatePreferencesOnChain` to support the creation flow.)*
 
 ---
 
