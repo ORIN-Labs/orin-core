@@ -160,7 +160,7 @@ export async function updatePreferencesOnChain(
   const signedTx = await (program.provider as any).wallet.signTransaction(tx);
 
   // Serialize without requiring all sigs (fee-payer sig will be added by server)
-  const serialized = signedTx.serialize({ requireAllSignatures: false }).toString("base64");
+  const serialized = signedTx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
 
   // Server co-signs + broadcasts, returns tx signature
   const relayResult = await opts!.relayFn!(serialized);
@@ -236,7 +236,7 @@ export async function initializeGuestOnChain(
   const signedTx = await (program.provider as any).wallet.signTransaction(tx);
 
   // Serialize without requiring fee-payer signature (server will add it)
-  const serialized = signedTx.serialize({ requireAllSignatures: false }).toString("base64");
+  const serialized = signedTx.serialize({ requireAllSignatures: false, verifySignatures: false }).toString("base64");
 
   const relayResult = await opts!.relayFn!(serialized);
   return relayResult.signature;

@@ -38,6 +38,8 @@ export function getRelayOpts() {
 export interface RoomPreferences {
   temp: number;
   lighting: "warm" | "cold" | "ambient";
+  brightness?: number;
+  musicOn?: boolean;
   services: string[];
   raw_response: string;
 }
@@ -65,10 +67,11 @@ export async function saveVoicePreferences(
   guestIdentifier: string,
   onTextReady?: (text: string) => void
 ): Promise<SavePreferencesResult> {
+  const activeContext = { ...guestContext, currentPreferences: preferences };
   const apiResponse = await stageVoiceCommand({
     guestPda: guestPda.toBase58(),
     userInput,
-    guestContext,
+    guestContext: activeContext,
   });
 
   if (onTextReady && apiResponse.aiResult) {

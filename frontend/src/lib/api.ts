@@ -10,6 +10,7 @@ export interface GuestContext {
   name: string;
   loyaltyPoints: number;
   history: string[];
+  currentPreferences?: any;
 }
 
 export interface VoiceCommandRequest {
@@ -193,6 +194,7 @@ export async function fetchFastVoiceReply(payload: {
   audioBase64: string;
   text?: string;
   fastIntent?: boolean;
+  latencyMs?: { llm: number; tts: number; total: number };
 }> {
   const response = await fetch(`${API_BASE}/api/v1/voice-fast`, {
     method: "POST",
@@ -206,6 +208,27 @@ export async function fetchFastVoiceReply(payload: {
   if (!response.ok) {
     const errorBody = await response.text();
     throw new Error(`Fast Voice API error (${response.status}): ${errorBody}`);
+  }
+
+  return response.json();
+}
+
+/**
+ * Checks out the guest and awards Loyalty Points using a Gas-Subsidized backend relay.
+ */
+export async function checkoutBooking(guestPda: string): Promise<any> {
+  const response = await fetch(`${API_BASE}/api/v1/booking/checkout`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": API_KEY,
+    },
+    body: JSON.stringify({ guestPda }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Checkout API error (${response.status}): ${errorBody}`);
   }
 
   return response.json();

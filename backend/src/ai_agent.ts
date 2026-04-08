@@ -6,6 +6,7 @@ export interface GuestContext {
   name: string;
   loyaltyPoints: number;
   history: string[];
+  currentPreferences?: any;
 }
 
 export type LightingMode = "warm" | "cold" | "ambient";
@@ -13,6 +14,8 @@ export type LightingMode = "warm" | "cold" | "ambient";
 export interface OrinAgentOutput {
   temp: number;
   lighting: LightingMode;
+  brightness: number;
+  musicOn: boolean;
   services: string[];
   raw_response: string;
 }
@@ -247,12 +250,15 @@ export class OrinAgent {
         SYSTEM_PROMPT,
         "Personalize responses with guest context, especially loyalty points.",
         "You MUST output only valid JSON with this exact schema and no extra keys:",
-        '{ "temp": number, "lighting": "warm" | "cold" | "ambient", "services": string[], "raw_response": string }',
+        '{ "temp": number, "lighting": "warm" | "cold" | "ambient", "brightness": number, "musicOn": boolean, "services": string[], "raw_response": string }',
         "The `raw_response` must be 15 words maximum.",
         "Do not output markdown, code fences, or any extra text.",
         "",
         "Guest context:",
         JSON.stringify(guestContext),
+        "",
+        "Current room state (maintain these exactly unless the user explicitly requested to change them!):",
+        JSON.stringify(guestContext.currentPreferences || {}),
         "",
         "User voice command:",
         userInput,
@@ -372,17 +378,19 @@ export class OrinAgent {
   private validateOutput(data: unknown): OrinAgentOutput {
     if (typeof data !== "object" || data === null) throw new Error("AI output is not a JSON object.");
     const obj = data as Record<string, unknown>;
-    const allowedKeys = new Set(["temp", "lighting", "services", "raw_response"]);
+    const allowedKeys = new Set(["temp", "lighting", "brightness", "musicOn", "services", "raw_response"]);
     const keys = Object.keys(obj);
 
     for (const key of keys) if (!allowedKeys.has(key)) throw new Error(`AI output has unsupported key: ${key}`);
     for (const key of allowedKeys) if (!(key in obj)) throw new Error(`AI output missing required key: ${key}`);
 
     if (typeof obj.temp !== "number" || Number.isNaN(obj.temp)) throw new Error("AI output 'temp' must be a number.");
+    if (typeof obj.brightness !== "number" || Number.isNaN(obj.brightness)) throw new Error("AI output 'brightness' must be a number.");
+    if (typeof obj.musicOn !== "boolean") throw new Error("AI output 'musicOn' must be a boolean.");
     if (obj.lighting !== "warm" && obj.lighting !== "cold" && obj.lighting !== "ambient") throw new Error("AI output 'lighting' must be 'warm' | 'cold' | 'ambient'.");
     if (!Array.isArray(obj.services) || !obj.services.every((v) => typeof v === "string")) throw new Error("AI output 'services' must be string[].");
     if (typeof obj.raw_response !== "string") throw new Error("AI output 'raw_response' must be a string.");
 
-    return { temp: obj.temp, lighting: obj.lighting, services: obj.services, raw_response: obj.raw_response };
+    return { temp: obj.temp, lighting: obj.lighting, brightness: obj.brightness, musicOn: obj.musicOn, services: obj.services, raw_response: obj.raw_response };
   }
 }

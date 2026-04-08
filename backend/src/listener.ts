@@ -42,7 +42,7 @@ function buildGuestContext(decodedAccount: any): GuestContext {
   return {
     name: decodedAccount?.name ?? "Guest",
     loyaltyPoints: Number(decodedAccount?.loyaltyPoints ?? decodedAccount?.loyalty_points ?? 0),
-    history: ["prefers comfort at night", "expects fast response"],
+    history: decodedAccount?.history ?? [],
   };
 }
 
@@ -122,6 +122,8 @@ export function startSecureGatewayListener(): number {
         const mqttPayload = JSON.stringify({
           lighting: payload.lighting,
           temp: payload.temp,
+          brightness: payload.brightness,
+          musicOn: payload.musicOn,
           services: payload.services,
         });
 
@@ -146,11 +148,7 @@ export function startSecureGatewayListener(): number {
         });
 
         if (payload.raw_response) {
-          const audioBuffer = await agent.speak(payload.raw_response);
-          await fs.promises.writeFile(audioPath, audioBuffer);
-          requestLog.info({ path: audioPath }, "voice_feedback_written");
-        } else {
-          requestLog.info("no_raw_response_skip_voice");
+          requestLog.info({ response: payload.raw_response }, "voice_feedback_ready_for_ui_fetch");
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -161,7 +159,42 @@ export function startSecureGatewayListener(): number {
   );
 }
 
+/**
+ * Robust Listener with Auto-Reconnection logic.
+ * Ensures the Orin IoT Gateway remains online even if the
+ * Solana RPC websocket flickers or disconnects.
+ */
+export async function listenWithRetry() {
+  let subscriptionId: number | null = null;
+
+  const start = () => {
+    try {
+      subscriptionId = startSecureGatewayListener();
+      logger.info({ subscriptionId }, "solana_subscription_active");
+    } catch (err: any) {
+      logger.error({ err: err.message }, "solana_subscription_failed_retrying");
+      setTimeout(start, 5000);
+    }
+  };
+
+  // Listen for connection close events if the provider supports it, 
+  // or heart-beat check every 30s.
+  setInterval(async () => {
+    try {
+      await connection.getSlot();
+    } catch (e) {
+      logger.warn("solana_rpc_heartbeat_failed_reconnecting");
+      if (subscriptionId !== null) {
+        connection.removeProgramAccountChangeListener(subscriptionId).catch(() => {});
+      }
+      start();
+    }
+  }, 30000);
+
+  start();
+}
+
 if (require.main === module) {
-  startSecureGatewayListener();
+  listenWithRetry();
 }
 

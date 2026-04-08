@@ -52,9 +52,9 @@ import { cn } from "../lib/utils";
 // Wallet & Solana Hooks
 import { useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
-import { transcribeAudio, fetchFastVoiceReply } from "../lib/api";
-import { saveManualPreferences, saveVoicePreferences } from "../lib/savePreferences";
-import { getProgram, getProvider } from "../lib/solana";
+import { transcribeAudio, fetchFastVoiceReply, checkoutBooking } from "../lib/api";
+import { saveManualPreferences, saveVoicePreferences, getRelayOpts } from "../lib/savePreferences";
+import { getProgram, getProvider, fetchGuestProfile, initializeGuestOnChain } from "../lib/solana";
 import { deriveGuestPda, ORIN_PROGRAM_ID } from "../lib/pda";
 import idl from "../../idl/orin_identity.json";
 
@@ -344,21 +344,56 @@ const Dashboard = ({
   guestEmail,
   walletAddress,
   profileData,
+  setProfileData,
   onLogout
 }: {
   guestName: string;
   guestEmail: string;
   walletAddress: string;
   profileData: any;
+  setProfileData: React.Dispatch<React.SetStateAction<any>>;
   onLogout: () => void;
 }) => {
   const [activeTab, setActiveTab] = useState<DashboardTab>("home");
-  const [temperature, setTemperature] = useState(22);
-  const [brightness, setBrightness] = useState(60);
-  const [lightingMode, setLightingMode] = useState<"warm" | "cold" | "ambient">("warm");
-  const [musicOn, setMusicOn] = useState(true);
+  const [temperature, setTemperature] = useState(() => {
+    if (typeof window !== "undefined") {
+      const t = localStorage.getItem("orin_temp");
+      if (t) return Number(t);
+    }
+    return 22;
+  });
+  const [brightness, setBrightness] = useState(() => {
+    if (typeof window !== "undefined") {
+      const b = localStorage.getItem("orin_brightness");
+      if (b) return Number(b);
+    }
+    return 60;
+  });
+  const [lightingMode, setLightingMode] = useState<"warm" | "cold" | "ambient">(() => {
+    if (typeof window !== "undefined") {
+      const l = localStorage.getItem("orin_lighting");
+      if (l) return l as "warm" | "cold" | "ambient";
+    }
+    return "warm";
+  });
+  const [musicOn, setMusicOn] = useState(() => {
+    if (typeof window !== "undefined") {
+      const m = localStorage.getItem("orin_music");
+      if (m) return m === "true";
+    }
+    return true;
+  });
+  const [services, setServices] = useState<string[]>([]);
+
+  // Save to local storage on change
+  useEffect(() => {
+    localStorage.setItem("orin_temp", temperature.toString());
+    localStorage.setItem("orin_brightness", brightness.toString());
+    localStorage.setItem("orin_lighting", lightingMode);
+    localStorage.setItem("orin_music", musicOn.toString());
+  }, [temperature, brightness, lightingMode, musicOn]);
   const [isRecording, setIsRecording] = useState(false);
-  const [chatMessages, setChatMessages] = useState<Array<{role: "user" | "orin"; text: string}>>([
+  const [chatMessages, setChatMessages] = useState<Array<{role: "user" | "orin"; text: string; latencyMs?: {llm: number; tts: number; total: number}}>>([
     { role: "orin", text: `Welcome, ${guestName}. I'm ORIN, your personal AI concierge. How can I help you today?` },
   ]);
   const [chatInput, setChatInput] = useState("");
@@ -380,18 +415,26 @@ const Dashboard = ({
     });
     setChatMessages((prev) => [...prev, { role: "orin", text: `I'll adjust that for you right away, ${guestName}. Processing your request...` }]);
 
+    const chatHistory = chatMessages
+      .slice(-6)
+      .map(m => `${m.role === "orin" ? "ORIN" : "Guest"}: ${m.text}`);
+
     try {
       // 1. Fire /voice-fast FIRST — get instant subtitle + audio
       const fastResult = await fetchFastVoiceReply({
         userInput: text,
-        guestContext: { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: [] }
+        guestContext: { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: chatHistory }
       });
 
       // 2. Instantly render the text subtitle from voice-fast
       if (fastResult.text) {
         setChatMessages((prev) => {
           const newMsgs = [...prev];
-          newMsgs[newMsgs.length - 1] = { role: "orin", text: fastResult.text! };
+          newMsgs[newMsgs.length - 1] = { 
+            role: "orin", 
+            text: fastResult.text!,
+            latencyMs: fastResult.latencyMs
+          };
           return newMsgs;
         });
       }
@@ -414,8 +457,8 @@ const Dashboard = ({
           guestPda,
           wallet.publicKey,
           text,
-          { temp: temperature, lighting: lightingMode, services: [], raw_response: "" },
-          { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: [] },
+          { temp: temperature, lighting: lightingMode, brightness, musicOn, services: services, raw_response: "" },
+          { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: chatHistory },
           guestName,
           (asyncText: string) => {
             setChatMessages((prev) => {
@@ -426,6 +469,15 @@ const Dashboard = ({
           }
         );
         
+        // Update local React state from AI interpretation to keep UI in sync
+        if (res.aiResult) {
+          if (res.aiResult.temp !== undefined) setTemperature(Number(res.aiResult.temp));
+          if (res.aiResult.lighting !== undefined) setLightingMode(res.aiResult.lighting);
+          if (res.aiResult.brightness !== undefined) setBrightness(Number(res.aiResult.brightness));
+          if (res.aiResult.musicOn !== undefined) setMusicOn(Boolean(res.aiResult.musicOn));
+          if (res.aiResult.services && Array.isArray(res.aiResult.services)) setServices(res.aiResult.services);
+        }
+
         // Append signature silently to chat if it was required
         const sigStr = res.solanaTxSignature;
         if (sigStr) {
@@ -458,7 +510,7 @@ const Dashboard = ({
         program,
         guestPda,
         wallet.publicKey,
-        { temp: temperature, lighting: lightingMode, services: [], raw_response: "" },
+        { temp: temperature, lighting: lightingMode, brightness, musicOn, services: services, raw_response: "" },
         { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: [] },
         guestName
       );
@@ -468,6 +520,45 @@ const Dashboard = ({
       alert(`Error saving setup: ${e.message}`);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleInitializeIdentity = async () => {
+    if (!wallet.publicKey) return;
+    setIsSaving(true);
+    try {
+      const { pda, identifierHash } = deriveGuestPda(guestName, wallet.publicKey);
+      const provider = getProvider(wallet);
+      const program = getProgram(provider, idl as any);
+
+      const sig = await initializeGuestOnChain(
+        program,
+        pda,
+        wallet.publicKey,
+        identifierHash,
+        guestName,
+        getRelayOpts()
+      );
+      
+      alert(`Identity Created: ${sig.slice(0, 10)}...`);
+      setProfileData({ isInitialized: true, stayCount: 0, loyaltyPoints: 0 });
+    } catch (e: any) {
+      alert(`Error initializing identity: ${e.message}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (!wallet.publicKey) return;
+    try {
+      const guestPda = deriveGuestPda(guestName, wallet.publicKey).pda.toBase58();
+      await checkoutBooking(guestPda);
+      alert("Checkout complete. Loyalty points earned!");
+      // Force reload or re-sync state later (lazy implementation for hackathon)
+      window.location.reload();
+    } catch (e: any) {
+      alert(`Error checking out: ${e.message}`);
     }
   };
 
@@ -671,6 +762,13 @@ const Dashboard = ({
                 : "bg-accent text-[#332F2E] rounded-tr-none"
             )}>
               <p className="text-sm">{msg.text}</p>
+              {msg.latencyMs && (
+                <div className="flex gap-2 mt-2 pt-2 border-t border-emerald-500/10">
+                  <span className="text-[9px] text-emerald-500/50 uppercase font-mono tracking-widest">
+                    LLM: {msg.latencyMs.llm}ms | TTS: {msg.latencyMs.tts}ms | Total: {msg.latencyMs.total}ms
+                  </span>
+                </div>
+              )}
             </div>
           </motion.div>
         ))}
@@ -858,6 +956,25 @@ const Dashboard = ({
         </Card>
       </motion.div>
 
+      {/* Active Services */}
+      {services.length > 0 && (
+        <motion.div variants={itemVariants}>
+          <Card className="space-y-4 p-6 border-accent/20">
+            <div className="flex items-center gap-3 text-accent">
+              <Activity size={20} />
+              <span className="font-bold text-base">Active Requests</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {services.map((svc, i) => (
+                <div key={i} className="flex items-center gap-2 bg-accent/10 text-accent text-xs font-bold px-3 py-1.5 rounded-full uppercase tracking-widest border border-accent/20">
+                  {svc}
+                </div>
+              ))}
+            </div>
+          </Card>
+        </motion.div>
+      )}
+
       {/* Save Button */}
       <motion.div variants={itemVariants}>
         <button
@@ -906,9 +1023,9 @@ const Dashboard = ({
         <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-widest mb-3">Saved Preferences</p>
         <div className="grid grid-cols-2 gap-3">
           {[
-            { icon: Thermometer, label: "Sleep Temp", value: "19°C" },
-            { icon: Lightbulb, label: "Lighting", value: "Warm" },
-            { icon: Music, label: "Music", value: "Ambient" },
+            { icon: Thermometer, label: "Current Temp", value: `${temperature}°C` },
+            { icon: Lightbulb, label: "Lighting", value: lightingMode.charAt(0).toUpperCase() + lightingMode.slice(1) },
+            { icon: Music, label: "Music", value: musicOn ? "On" : "Off" },
             { icon: Globe, label: "Region", value: "Global" },
           ].map((pref) => (
             <Card key={pref.label} className="p-4 space-y-2">
@@ -937,9 +1054,44 @@ const Dashboard = ({
           </div>
           <div className="flex justify-between items-center">
             <span className="text-zinc-500 text-xs">Status</span>
-            <span className="text-emerald-500 font-mono text-xs font-bold">Authenticated</span>
+            <span className={cn(
+              "font-mono text-xs font-bold",
+              profileData?.isInitialized ? "text-emerald-500" : "text-amber-500"
+            )}>
+              {profileData?.isInitialized ? "Authenticated" : "Uninitialized"}
+            </span>
           </div>
         </Card>
+      </motion.div>
+
+      {!profileData?.isInitialized && (
+        <motion.div variants={itemVariants}>
+          <Card className="bg-amber-500/5 border-amber-500/20 space-y-3">
+            <div className="flex items-center gap-3 text-amber-500">
+              <Shield size={18} />
+              <h4 className="font-bold text-sm text-white">Identity Required</h4>
+            </div>
+            <p className="text-xs text-zinc-400">
+              Your profile hasn't been written to Solana yet. You can initialize it now to start earning points.
+            </p>
+            <button
+              onClick={handleInitializeIdentity}
+              disabled={isSaving}
+              className="w-full py-2.5 rounded-lg bg-zinc-900 border border-zinc-800 text-amber-500 text-[10px] font-mono uppercase tracking-widest hover:border-amber-500/50 transition-all"
+            >
+              {isSaving ? "Initializing..." : "Create On-Chain Identity"}
+            </button>
+          </Card>
+        </motion.div>
+      )}
+
+      <motion.div variants={itemVariants}>
+        <button
+          onClick={handleCheckout}
+          className="w-full py-4 rounded-xl font-bold transition-all text-sm bg-accent text-black accent-glow hover:scale-[1.02] active:scale-[0.98]"
+        >
+          Complete Stay & Checkout
+        </button>
       </motion.div>
 
       <motion.div variants={itemVariants}>
@@ -1042,7 +1194,8 @@ const Dashboard = ({
 // ============================================================
 
 export default function App() {
-  const { connected, publicKey, disconnect } = useWallet();
+  const wallet = useWallet();
+  const { connected, publicKey, disconnect } = wallet;
   const [view, setView] = useState<View>("landing");
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -1077,6 +1230,25 @@ export default function App() {
       if (savedName) {
         setGuestName(savedName);
         setView("dashboard");
+
+        // Fetch on-chain profile data to avoid empty loyalty points
+        const { pda } = deriveGuestPda(savedName, publicKey);
+        const provider = getProvider(wallet);
+        const program = getProgram(provider, idl as any);
+        fetchGuestProfile(program, pda).then(data => {
+          if (data) {
+            setProfileData({
+              isInitialized: true,
+              stayCount: data.stayCount?.toNumber() || 0,
+              loyaltyPoints: data.loyaltyPoints?.toNumber() || 0
+            });
+          } else {
+            setProfileData({ isInitialized: false, stayCount: 0, loyaltyPoints: 0 });
+          }
+        }).catch(err => {
+          console.warn("Failed to fetch guest profile", err);
+          setProfileData({ isInitialized: false, stayCount: 0, loyaltyPoints: 0 });
+        });
       } else if (view === "landing") {
         setView("onboarding");
       }
@@ -1097,7 +1269,8 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("orin_guest_name");
+    // DO NOT REMOVE guest_name so it 'remembers user name after reconnecting'
+    // localStorage.removeItem("orin_guest_name");
     localStorage.removeItem("orin_guest_email");
     setGuestName("");
     setGuestEmail("");
@@ -1150,6 +1323,7 @@ export default function App() {
               guestEmail={guestEmail}
               walletAddress={walletAddress}
               profileData={profileData}
+              setProfileData={setProfileData}
               onLogout={handleLogout}
             />
           </motion.div>

@@ -4,8 +4,11 @@ import multipart from "@fastify/multipart";
 import websocket from "@fastify/websocket";
 import WebSocket from "ws";
 import { createClient } from "@deepgram/sdk";
-import { Connection } from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 import { randomUUID } from "node:crypto";
+import * as fs from "fs";
+import * as path from "path";
+import * as anchor from "@coral-xyz/anchor";
 import { validateEnvOrExit } from "../config/validate_env";
 import { getEnv, getAllowedOrigins } from "../config/env";
 import { stateProvider } from "../state";
@@ -13,7 +16,7 @@ import { createRequestLogger, logger } from "../shared/logger";
 import { GuestContext, LlmError, OrinAgent } from "../ai_agent";
 import { generateSha256Hash } from "../shared/hash";
 import { getFeePayerKeypair, relayTransaction } from "../shared/feePayer";
-import { RPC_ENDPOINT } from "../shared/constants";
+import { RPC_ENDPOINT, PROGRAM_ID, PATHS } from "../shared/constants";
 import { FAST_INTENTS } from "../config/fast_intents";
 
 /**
@@ -315,12 +318,15 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
     const aiHashHex = aiResult.hash.toString("hex");
 
     // Determine if the parsed command actually mutates the room into a valid state. 
-    // E.g., if AI just says "hello", temp is 0/null. We only request signatures for actual room mutations.
-    const temp = Number(aiResult.payload.temp);
-    const lighting = String(aiResult.payload.lighting).toLowerCase();
-    const isTempValid = (temp >= 16 && temp <= 32) || (temp >= 60 && temp <= 90); // Supports both Celsius and Fahrenheit
-    const isLightingValid = ["warm", "cold", "ambient"].includes(lighting);
-    const requiresSignature = isTempValid && isLightingValid;
+    // We request signatures if ANY significant property is non-zero or explicitly modified.
+    const p = aiResult.payload;
+    const hasTemp = (p.temp >= 16 && p.temp <= 32) || (p.temp >= 60 && p.temp <= 90);
+    const hasLighting = ["warm", "cold", "ambient"].includes(p.lighting);
+    const hasMusic = p.musicOn === true;
+    const hasBrightness = p.brightness > 0;
+    const hasServices = p.services && p.services.length > 0;
+
+    const requiresSignature = hasTemp || hasLighting || hasMusic || hasBrightness || hasServices;
 
     // Stage it exactly like a manual bypass payload so the listener just verifies and executes
     await stateProvider.setDirectPayload(aiHashHex, aiResult.payload);
@@ -892,6 +898,61 @@ app.post<{ Body: { transaction: string } }>("/api/v1/relay", async (request, rep
       error: "Relay failed.",
       details: error.message,
     });
+  }
+});
+
+app.post<{ Body: { guestPda: string } }>("/api/v1/booking/checkout", async (request, reply) => {
+  const reqLogger = request.reqLogger;
+
+  const apiKey = request.headers["x-api-key"];
+  if (apiKey !== env.API_KEY) {
+    return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+  }
+
+  const { guestPda } = request.body ?? {};
+
+  if (!guestPda) {
+    return reply.status(400).send({ error: "guestPda is required" });
+  }
+
+  try {
+    const guestPubkey = new PublicKey(guestPda);
+
+    // Pre-flight check: ensure the guest PDA is actually initialized on-chain
+    const accountInfo = await rpcConnection.getAccountInfo(guestPubkey);
+    if (!accountInfo) {
+      return reply.status(404).send({ 
+        error: "Guest Identity not initialized", 
+        details: "The guest must save room preferences or manually initialize their identity on-chain before a booking can be recorded."
+      });
+    }
+
+    const feePayer = getFeePayerKeypair();
+    const wallet = new anchor.Wallet(feePayer);
+    const provider = new anchor.AnchorProvider(rpcConnection, wallet, { commitment: "confirmed" });
+    anchor.setProvider(provider);
+
+    const idlPath = path.resolve(__dirname, PATHS.IDL_PATH);
+    const idl = JSON.parse(fs.readFileSync(idlPath, "utf8")) as anchor.Idl;
+    
+    // Fallback to new anchor.Program for local instantiation
+    const program = new anchor.Program(idl, PROGRAM_ID, provider);
+
+    const txSignature = await program.methods.recordBooking(new anchor.BN(50)).accounts({
+      guestProfile: new PublicKey(guestPda),
+      authority: feePayer.publicKey,
+    } as any).rpc();
+
+    reqLogger.info({ signature: txSignature, guest_pda: guestPda }, "record_booking_success");
+    
+    return reply.status(200).send({
+      status: "success",
+      signature: txSignature,
+      message: "Checkout complete, loyalty points awarded."
+    });
+  } catch (error: any) {
+    reqLogger.error({ error: error.message }, "record_booking_error");
+    return reply.status(500).send({ error: "Record booking failed", details: error.message });
   }
 });
 
