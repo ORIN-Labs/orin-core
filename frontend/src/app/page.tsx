@@ -50,11 +50,11 @@ import {
 import { cn } from "../lib/utils";
 
 // Wallet & Solana Hooks
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useWallet, useAnchorWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 import { transcribeAudio, fetchFastVoiceReply } from "../lib/api";
-import { saveManualPreferences, saveVoicePreferences } from "../lib/savePreferences";
-import { getProgram, getProvider } from "../lib/solana";
+import { saveManualPreferences, saveVoicePreferences, getRelayOpts } from "../lib/savePreferences";
+import { getProgram, getProvider, initializeGuestOnChain, fetchGuestProfile } from "../lib/solana";
 import { deriveGuestPda, ORIN_PROGRAM_ID } from "../lib/pda";
 import idl from "../../idl/orin_identity.json";
 
@@ -344,12 +344,16 @@ const Dashboard = ({
   guestEmail,
   walletAddress,
   profileData,
+  isProfileLoading,
+  setProfileData,
   onLogout
 }: {
   guestName: string;
   guestEmail: string;
   walletAddress: string;
   profileData: any;
+  isProfileLoading: boolean;
+  setProfileData: (data: any) => void;
   onLogout: () => void;
 }) => {
   const [activeTab, setActiveTab] = useState<DashboardTab>("home");
@@ -362,11 +366,21 @@ const Dashboard = ({
     { role: "orin", text: `Welcome, ${guestName}. I'm ORIN, your personal AI concierge. How can I help you today?` },
   ]);
   const [chatInput, setChatInput] = useState("");
+  const [activeRequests, setActiveRequests] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wallet = useWallet();
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+
+  const playAudio = async (base64: string, mimeType: string) => {
+    try {
+      const audio = new Audio("data:" + mimeType + ";base64," + base64);
+      await audio.play();
+    } catch (e) {
+      console.warn("[ORIN] Audio play blocked or failed. User interaction might be required.", e);
+    }
+  };
 
   const handleVoiceCommand = async (text: string) => {
     if (!text.trim() || !wallet.publicKey) return;
@@ -382,9 +396,11 @@ const Dashboard = ({
 
     try {
       // 1. Fire /voice-fast FIRST — get instant subtitle + audio
+      const chatHistory = chatMessages.slice(-6).map(m => m.text);
+      const currentPoints = profileData?.loyaltyPoints ?? profileData?.loyalty_points;
       const fastResult = await fetchFastVoiceReply({
         userInput: text,
-        guestContext: { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: [] }
+        guestContext: { name: guestName, loyaltyPoints: currentPoints?.toNumber?.() || Number(currentPoints) || 0, history: chatHistory }
       });
 
       // 2. Instantly render the text subtitle from voice-fast
@@ -398,9 +414,7 @@ const Dashboard = ({
 
       // 3. Play audio (non-blocking)
       if (fastResult.audioBase64) {
-        new Audio("data:" + fastResult.mimeType + ";base64," + fastResult.audioBase64)
-          .play()
-          .catch(e => console.warn("Autoplay blocked:", e));
+        playAudio(fastResult.audioBase64, fastResult.mimeType);
       }
 
       // 4. Only trigger the heavier /voice-command + Solana flow if fastIntent === true
@@ -409,14 +423,15 @@ const Dashboard = ({
         const provider = getProvider(wallet);
         const program = getProgram(provider, idl as any);
         
-        const res = await saveVoicePreferences(
-          program,
-          guestPda,
-          wallet.publicKey,
-          text,
-          { temp: temperature, lighting: lightingMode, services: [], raw_response: "" },
-          { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: [] },
-          guestName,
+          const currentPoints = profileData?.loyaltyPoints ?? profileData?.loyalty_points;
+          const res = await saveVoicePreferences(
+            program,
+            guestPda,
+            wallet.publicKey,
+            text,
+            { temp: temperature, lighting: lightingMode, brightness, musicOn, services: [], raw_response: "" },
+            { name: guestName, loyaltyPoints: currentPoints?.toNumber?.() || Number(currentPoints) || 0, history: chatHistory },
+            guestName,
           (asyncText: string) => {
             setChatMessages((prev) => {
               const newMsgs = [...prev];
@@ -426,6 +441,19 @@ const Dashboard = ({
           }
         );
         
+        // Update local React state from AI interpretation to keep UI in sync
+        if (res.aiResult) {
+          if (res.aiResult.temp !== undefined) setTemperature(Number(res.aiResult.temp));
+          if (res.aiResult.lighting !== undefined) setLightingMode(res.aiResult.lighting);
+          if (res.aiResult.brightness !== undefined) setBrightness(Number(res.aiResult.brightness));
+          if (res.aiResult.musicOn !== undefined) setMusicOn(Boolean(res.aiResult.musicOn));
+          
+          // Handle service requests from AI
+          if (res.aiResult.services && Array.isArray(res.aiResult.services) && res.aiResult.services.length > 0) {
+            setActiveRequests(prev => [...new Set([...prev, ...res.aiResult.services])]);
+          }
+        }
+
         // Append signature silently to chat if it was required
         const sigStr = res.solanaTxSignature;
         if (sigStr) {
@@ -458,8 +486,8 @@ const Dashboard = ({
         program,
         guestPda,
         wallet.publicKey,
-        { temp: temperature, lighting: lightingMode, services: [], raw_response: "" },
-        { name: guestName, loyaltyPoints: parseInt(loyaltyPoints) || 0, history: [] },
+        { temp: temperature, lighting: lightingMode, brightness, musicOn, services: [], raw_response: "" },
+        { name: guestName, loyaltyPoints: profileData?.loyaltyPoints?.toNumber?.() || Number(profileData?.loyaltyPoints) || 0, history: [] },
         guestName
       );
       const sigText = res.solanaTxSignature ? `\nSignature: ${res.solanaTxSignature.slice(0,10)}...` : ``;
@@ -471,9 +499,47 @@ const Dashboard = ({
     }
   };
 
+  const handleInitializeIdentity = async () => {
+    if (!wallet.publicKey) return;
+    setIsSaving(true);
+    try {
+      const { pda, identifierHash } = deriveGuestPda(guestName, wallet.publicKey);
+      const provider = getProvider(wallet);
+      const program = getProgram(provider, idl as any);
+
+      const sig = await initializeGuestOnChain(
+        program,
+        pda,
+        wallet.publicKey,
+        identifierHash,
+        guestName,
+        getRelayOpts()
+      );
+      
+      alert(`Identity Created: ${sig.slice(0, 10)}...`);
+      setProfileData({ isInitialized: true, stayCount: 0, loyaltyPoints: 0 });
+    } catch (e: any) {
+      alert(`Error initializing identity: ${e.message}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleCheckout = async () => {
+    alert("Checkout UI Active. Requesting endpoint from backend...");
+    // This will be wired up once the backend dev provides the endpoint.
+  };
+
   useEffect(() => {
+    let active = true;
+
     if (isRecording) {
       navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+        if (!active) {
+            // User stopped clicking while we were getting permission
+            stream.getTracks().forEach(t => t.stop());
+            return;
+        }
         const recorder = new MediaRecorder(stream);
         recorder.ondataavailable = e => audioChunksRef.current.push(e.data);
         recorder.onstop = async () => {
@@ -496,12 +562,27 @@ const Dashboard = ({
         recorder.start();
         mediaRecorderRef.current = recorder;
       }).catch(e => {
-          alert('Microphone access denied or unavailable.');
-          setIsRecording(false);
+          if (active) {
+            alert('Microphone access denied or unavailable.');
+            setIsRecording(false);
+          }
       });
     } else {
-      mediaRecorderRef.current?.stop();
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+        mediaRecorderRef.current.stop();
+        // Critical: Stop all tracks to turn off the mic hardware/LED
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
     }
+
+    return () => {
+        active = false;
+        // Also cleanup if the whole component unmounts
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+            mediaRecorderRef.current.stop();
+            mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+        }
+    };
   }, [isRecording]);
 
   const scrollToBottom = () => {
@@ -523,8 +604,12 @@ const Dashboard = ({
     visible: { opacity: 1, y: 0 }
   };
 
-  const loyaltyPoints = profileData?.loyaltyPoints?.toString?.() || "0";
-  const stayCount = profileData?.stayCount || 0;
+  // Consolidate access to on-chain data with robust camel/snake-case fallbacks
+  const pointsRaw = profileData?.loyaltyPoints ?? profileData?.loyalty_points;
+  const stayRaw = profileData?.stayCount ?? profileData?.stay_count;
+
+  const loyaltyPoints = pointsRaw?.toString?.() || "0";
+  const stayCount = stayRaw || 0;
 
   // --- HOME TAB ---
   const renderHome = () => (
@@ -541,6 +626,31 @@ const Dashboard = ({
           Welcome, <span className="text-accent">{guestName}</span>.
         </h1>
       </motion.div>
+
+      {/* Active Requests (Visible only if requests exist) */}
+      {activeRequests.length > 0 && (
+        <motion.div variants={itemVariants}>
+          <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-widest mb-3">Active Requests</p>
+          <div className="space-y-2">
+            {activeRequests.map((req, i) => (
+              <Card key={i} className="flex items-center justify-between border-accent/20 bg-accent/5 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center text-accent">
+                    <Check size={16} />
+                  </div>
+                  <span className="text-sm font-medium">{req}</span>
+                </div>
+                <button 
+                  onClick={() => setActiveRequests(prev => prev.filter((_, idx) => idx !== i))}
+                  className="text-zinc-500 hover:text-white transition-colors p-1"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </Card>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* ORIN Status */}
       <motion.div variants={itemVariants} className="flex items-center gap-3">
@@ -893,12 +1003,32 @@ const Dashboard = ({
             <h3 className="text-2xl font-bold">{guestName}</h3>
             <p className="text-zinc-500 text-xs font-mono">{walletAddress.slice(0, 8)}...{walletAddress.slice(-8)}</p>
           </div>
-          <div className="flex items-center gap-2 bg-accent/10 text-accent text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-accent/20">
-            <Shield size={12} /> ORIN Identity Verified
-          </div>
+          {isProfileLoading ? (
+            <div className="flex items-center gap-2 bg-zinc-900 text-zinc-500 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-zinc-800 animate-pulse">
+              <Activity size={12} className="animate-spin" /> Syncing with Solana...
+            </div>
+          ) : profileData ? (
+            <div className="flex items-center gap-2 bg-accent/10 text-accent text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-accent/20">
+              <Shield size={12} /> ORIN Identity Verified
+            </div>
+          ) : (
+            <button
+              onClick={handleInitializeIdentity}
+              disabled={isSaving}
+              className="flex items-center gap-2 bg-zinc-800 text-zinc-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-zinc-700 hover:bg-zinc-700 transition-colors"
+            >
+              <Shield size={12} /> {isSaving ? "Initializing..." : "Create On-Chain Identity"}
+            </button>
+          )}
           <p className="text-zinc-600 text-[10px] uppercase tracking-widest">
             {stayCount} activations · <span className="text-accent">{loyaltyPoints}</span> pts
           </p>
+          <button
+            onClick={handleCheckout}
+            className="text-accent text-[10px] font-bold uppercase tracking-widest hover:underline mt-2"
+          >
+            Finalize Stay & Redeem Rewards →
+          </button>
         </Card>
       </motion.div>
 
@@ -1043,6 +1173,7 @@ const Dashboard = ({
 
 export default function App() {
   const { connected, publicKey, disconnect } = useWallet();
+  const wallet = useAnchorWallet();
   const [view, setView] = useState<View>("landing");
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -1050,6 +1181,7 @@ export default function App() {
   const [guestEmail, setGuestEmail] = useState("");
   const [walletAddress, setWalletAddress] = useState("");
   const [profileData, setProfileData] = useState<any>(null);
+  const [isProfileLoading, setIsProfileLoading] = useState(false);
 
   // Boot animation
   useEffect(() => {
@@ -1068,7 +1200,7 @@ export default function App() {
 
   // Detect wallet connection → navigate to onboarding or dashboard
   useEffect(() => {
-    if (!isLoading && connected && publicKey) {
+    if (!isLoading && connected && publicKey && wallet) {
       const addr = publicKey.toBase58();
       setWalletAddress(addr);
 
@@ -1081,7 +1213,39 @@ export default function App() {
         setView("onboarding");
       }
     }
-  }, [isLoading, connected, publicKey]);
+  }, [isLoading, connected, publicKey, wallet]);
+
+  const syncProfile = useCallback(async (nameOverride?: string) => {
+    if (!connected || !publicKey || !wallet) return;
+    
+    setIsProfileLoading(true);
+    try {
+      const name = nameOverride || localStorage.getItem("orin_guest_name") || "";
+      const { pda } = deriveGuestPda(name, publicKey);
+      const provider = getProvider(wallet);
+      const program = getProgram(provider, idl as any);
+      const profile = await fetchGuestProfile(program, pda);
+      
+      if (profile) {
+        setProfileData(profile);
+        if (profile.name && profile.name !== name) {
+          setGuestName(profile.name);
+          localStorage.setItem("orin_guest_name", profile.name);
+        }
+      }
+    } catch (e) {
+      console.error("Profile sync failed", e);
+    } finally {
+      setIsProfileLoading(false);
+    }
+  }, [connected, publicKey, wallet]);
+
+  // Initial Sync
+  useEffect(() => {
+    if (connected && publicKey && wallet && !profileData && !isProfileLoading) {
+      syncProfile();
+    }
+  }, [connected, publicKey, wallet, syncProfile, profileData, isProfileLoading]);
 
   // Detect wallet disconnect → go back to landing
   useEffect(() => {
@@ -1094,6 +1258,7 @@ export default function App() {
     setGuestName(name);
     localStorage.setItem("orin_guest_name", name);
     setView("dashboard");
+    syncProfile(name);
   };
 
   const handleLogout = () => {
@@ -1150,6 +1315,8 @@ export default function App() {
               guestEmail={guestEmail}
               walletAddress={walletAddress}
               profileData={profileData}
+              isProfileLoading={isProfileLoading}
+              setProfileData={setProfileData}
               onLogout={handleLogout}
             />
           </motion.div>

@@ -22,10 +22,10 @@ import idl from "@idl/orin_identity.json";
 type LightingMode = "warm" | "cold" | "ambient";
 type RoomMode = "relax" | "focus" | "sleep";
 
-const MODE_PRESETS: Record<RoomMode, { temp: number; brightness: number; lighting: LightingMode; color: string; label: string; desc: string }> = {
-  relax: { temp: 23, brightness: 40, lighting: "warm", color: "#FF8C42", label: "Relax", desc: "Warm · 23°C · 40%" },
-  focus: { temp: 21, brightness: 85, lighting: "cold", color: "#1E90FF", label: "Focus", desc: "Cool · 21°C · 85%" },
-  sleep: { temp: 19, brightness: 10, lighting: "ambient", color: "#4B0082", label: "Sleep", desc: "Ambient · 19°C · 10%" },
+const MODE_PRESETS: Record<RoomMode, { temp: number; brightness: number; lighting: LightingMode; musicOn: boolean; color: string; label: string; desc: string }> = {
+  relax: { temp: 23, brightness: 40, lighting: "warm", musicOn: true, color: "#FF8C42", label: "Relax", desc: "Warm · 23°C · 40%" },
+  focus: { temp: 21, brightness: 85, lighting: "cold", musicOn: false, color: "#1E90FF", label: "Focus", desc: "Cool · 21°C · 85%" },
+  sleep: { temp: 19, brightness: 10, lighting: "ambient", musicOn: true, color: "#4B0082", label: "Sleep", desc: "Ambient · 19°C · 10%" },
 };
 
 export default function RoomControl() {
@@ -37,6 +37,7 @@ export default function RoomControl() {
   const [brightness, setBrightness] = useState(60);
   const [lightColor, setLightColor] = useState("#C9A84C");
   const [lightingType, setLightingType] = useState<LightingMode>("warm");
+  const [musicOn, setMusicOn] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<SavePreferencesResult | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -56,6 +57,7 @@ export default function RoomControl() {
     setBrightness(p.brightness);
     setLightColor(p.color);
     setLightingType(p.lighting);
+    setMusicOn(p.musicOn);
   }, []);
 
   const handleSave = useCallback(async () => {
@@ -74,6 +76,8 @@ export default function RoomControl() {
       const preferences: RoomPreferences = {
         temp: temperature,
         lighting: lightingType,
+        brightness: brightness,
+        musicOn: musicOn,
         services: [],
         raw_response: `Room set to ${temperature}°C with ${lightingType} lighting at ${brightness}% brightness.`,
       };
@@ -140,6 +144,8 @@ export default function RoomControl() {
             const preferences: RoomPreferences = {
               temp: temperature,
               lighting: lightingType,
+              brightness: brightness,
+              musicOn: musicOn,
               services: [],
               raw_response: "Voice command processed",
             };

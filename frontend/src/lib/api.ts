@@ -10,6 +10,7 @@ export interface GuestContext {
   name: string;
   loyaltyPoints: number;
   history: string[];
+  currentPreferences?: any;
 }
 
 export interface VoiceCommandRequest {
