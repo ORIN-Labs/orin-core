@@ -11,10 +11,12 @@ export interface GuestContext {
   loyaltyPoints: number;
   history: string[];
   currentPreferences?: {
-    temp: number;
-    lighting: "warm" | "cold" | "ambient";
-    brightness: number;
-    musicOn: boolean;
+    target_temp_c?: number;
+    lighting?: string;
+    brightness?: number;
+    musicOn?: boolean;
+    services?: string[];
+    raw_response?: string;
   };
 }
 
@@ -218,20 +220,41 @@ export async function fetchFastVoiceReply(payload: {
   return response.json();
 }
 
-export interface DeviceStatus {
-  temp: number;
+export interface RoomDeviceState {
+  roomId: string;
+  hue: {
+    color: string;
+    brightness: number;
+    on: boolean;
+  };
   lighting: "warm" | "cold" | "ambient";
-  brightness: number;
-  musicOn: boolean;
-  musicTrack?: string;
-  guestPda: string;
+  nest: {
+    target_temp_c: number;
+    mode: string;
+  };
+  music: string;
+  lastUpdatedAt: string | null;
+  lastGuestPda: string | null;
+}
+
+export interface DeviceStatusResponse {
+  status: string;
+  device: RoomDeviceState;
+}
+
+export interface TtsResponse {
+  status: string;
+  mimeType: string;
+  audioBase64: string;
+  text: string;
+  latencyMs: number;
 }
 
 /**
  * GET /api/v1/device/status?guestPda=<YOUR_PDA>
  * Fetches the current live state of the room devices for a specific guest.
  */
-export async function fetchDeviceStatus(guestPda: string): Promise<DeviceStatus> {
+export async function fetchDeviceStatus(guestPda: string): Promise<RoomDeviceState> {
   const response = await fetch(`${API_BASE}/api/v1/device/status?guestPda=${guestPda}`, {
     method: "GET",
     headers: {
@@ -242,6 +265,29 @@ export async function fetchDeviceStatus(guestPda: string): Promise<DeviceStatus>
   if (!response.ok) {
     const errorBody = await response.text();
     throw new Error(`Device status API error (${response.status}): ${errorBody}`);
+  }
+
+  const data: DeviceStatusResponse = await response.json();
+  return data.device;
+}
+
+/**
+ * POST /api/v1/tts
+ * Converts arbitrary text into high-fidelity voice audio.
+ */
+export async function fetchTtsAudio(text: string): Promise<TtsResponse> {
+  const response = await fetch(`${API_BASE}/api/v1/tts`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-API-KEY": API_KEY,
+    },
+    body: JSON.stringify({ text }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`TTS API error (${response.status}): ${errorBody}`);
   }
 
   return response.json();

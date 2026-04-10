@@ -52,7 +52,7 @@ import { cn } from "../lib/utils";
 // Wallet & Solana Hooks
 import { useWallet, useAnchorWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
-import { transcribeAudio, fetchFastVoiceReply, fetchDeviceStatus } from "../lib/api";
+import { transcribeAudio, fetchFastVoiceReply, fetchDeviceStatus, fetchTtsAudio } from "../lib/api";
 import { saveManualPreferences, saveVoicePreferences, getRelayOpts } from "../lib/savePreferences";
 import { getProgram, getProvider, initializeGuestOnChain, fetchGuestProfile, getConnection } from "../lib/solana";
 import { deriveGuestPda, ORIN_PROGRAM_ID } from "../lib/pda";
@@ -209,7 +209,7 @@ const OnboardingFlow = ({ onComplete, onBack }: { onComplete: (name: string) => 
       icon: Brain,
       title: "How it works",
       desc: "Tell ORIN what you want, by voice or text. It learns your preferences and adjusts your space automatically.",
-      detail: "Temperature, lighting, music. All personalized, all remembered.",
+      detail: "target_temp_c, lighting, music. All personalized, all remembered.",
     },
     {
       icon: Fingerprint,
@@ -357,12 +357,18 @@ const Dashboard = ({
   onLogout: () => void;
 }) => {
   const [activeTab, setActiveTab] = useState<DashboardTab>("home");
-  const [temperature, setTemperature] = useState(22);
+  const [target_temp_c, setTargetTempC] = useState(22);
   const [brightness, setBrightness] = useState(60);
   const [lightingMode, setLightingMode] = useState<"warm" | "cold" | "ambient">("warm");
   const [musicOn, setMusicOn] = useState(true);
   const [musicTrack, setMusicTrack] = useState("Midnight in Tokyo");
   const [isRecording, setIsRecording] = useState(false);
+  const [nestMode, setNestMode] = useState("HEAT");
+  const [hueColor, setHueColor] = useState("#C4A97A");
+
+  // Anti-Flicker Guard: Prevents stale ground-truth from overwriting recent user changes
+  const lastInteractionRef = useRef<number>(0);
+  const setInteractionTimestamp = () => { lastInteractionRef.current = Date.now(); };
   const [chatMessages, setChatMessages] = useState<Array<{role: "user" | "orin"; text: string}>>([
     { role: "orin", text: `Welcome, ${guestName}. I'm ORIN, your personal AI concierge. How can I help you today?` },
   ]);
@@ -390,14 +396,32 @@ const Dashboard = ({
   };
 
   /**
-   * Consolidates all Dashboard UI updates from AI or Backend ground-truth.
-   * Ensures visual sliders always match the internal state logic.
+   * Consolidates all Dashboard UI updates from AI (flat) or Backend ground-truth (nested).
+   * Ensures visual sliders always match the internal state logic exactly.
    */
   const syncUIState = useCallback((state: any) => {
     if (!state) return;
-    if (state.temp !== undefined) setTemperature(Number(state.temp));
-    if (state.lighting !== undefined) setLightingMode(state.lighting);
+    
+    // Pessimistic Guard: Skip ground-truth if user recently interacted (3s quiet period)
+    const isRecentInteraction = Date.now() - lastInteractionRef.current < 3000;
+
+    // 1. Handle Nested Device Status structure (RoomDeviceState)
+    if (state.nest?.target_temp_c !== undefined && !isRecentInteraction) setTargetTempC(Number(state.nest.target_temp_c));
+    if (state.nest?.mode !== undefined && !isRecentInteraction) setNestMode(state.nest.mode);
+    
+    if (state.hue?.brightness !== undefined && !isRecentInteraction) setBrightness(Number(state.hue.brightness));
+    if (state.hue?.color !== undefined && !isRecentInteraction) setHueColor(state.hue.color);
+    
+    if (state.lighting !== undefined && !isRecentInteraction) setLightingMode(state.lighting);
+    
+    // 2. Handle Flat AI Response structure (OrinAgentOutput)
+    // AI responses are triggered by user interaction, so we allow them through
+    if (state.temp !== undefined) setTargetTempC(Number(state.temp));
     if (state.brightness !== undefined) setBrightness(Number(state.brightness));
+    if (state.lighting !== undefined) setLightingMode(state.lighting);
+    if (state.musicOn !== undefined) setMusicOn(!!state.musicOn);
+
+    // Common fields
     if (state.musicOn !== undefined || state.music !== undefined) {
       setMusicOn(state.musicOn ?? !!state.music);
     }
@@ -425,9 +449,21 @@ const Dashboard = ({
   // Initial and periodic ground-truth sync
   useEffect(() => {
     refreshGroundTruth();
+    
+    // Initial welcome announcement using the production-grade TTS pipeline
+    const playWelcome = async () => {
+        try {
+            const welcome = await fetchTtsAudio(`Welcome to your private residence, ${guestName}. I am ORIN, your personal AI concierge. All systems are online.`);
+            playAudio(welcome.audioBase64, welcome.mimeType);
+        } catch (e) {
+            console.warn("[ORIN] Failed to play property welcome", e);
+        }
+    };
+    playWelcome();
+
     const interval = setInterval(refreshGroundTruth, 30000); // 30s ground-truth sync
     return () => clearInterval(interval);
-  }, [refreshGroundTruth]);
+  }, [refreshGroundTruth, guestName]);
 
   // On-chain state listener (WebSocket)
   useEffect(() => {
@@ -465,7 +501,7 @@ const Dashboard = ({
       // 1. Fire /voice-fast FIRST — get instant subtitle + audio
       const chatHistory = chatMessages.slice(-6).map(m => m.text);
       const currentPoints = profileData?.loyaltyPoints ?? profileData?.loyalty_points;
-      const initialPrefs = { temp: temperature, lighting: lightingMode, brightness, musicOn };
+      const initialPrefs = { target_temp_c, lighting: lightingMode, brightness, musicOn };
       
       const fastResult = await fetchFastVoiceReply({
         userInput: text,
@@ -504,14 +540,19 @@ const Dashboard = ({
         const provider = getProvider(wallet);
         const program = getProgram(provider, idl as any);
         
-          const res = await saveVoicePreferences(
-            program,
-            guestPda,
-            wallet.publicKey!,
-            text,
-            activePrefs,
-            { name: guestName, loyaltyPoints: currentPoints?.toNumber?.() || Number(currentPoints) || 0, history: chatHistory },
-            guestName,
+        const res = await saveVoicePreferences(
+        program,
+        guestPda,
+        wallet.publicKey!,
+        text,
+        activePrefs,
+        { 
+          name: guestName, 
+          loyaltyPoints: currentPoints?.toNumber?.() || Number(currentPoints) || 0, 
+          history: chatHistory,
+          currentPreferences: activePrefs
+        },
+        guestName,
           (asyncText: string) => {
             setChatMessages((prev) => {
               const newMsgs = [...prev];
@@ -551,6 +592,7 @@ const Dashboard = ({
   const handleSaveSetup = async () => {
     if (!wallet.publicKey || !guestPda) return;
     setIsSaving(true);
+    setInteractionTimestamp();
     try {
       const provider = getProvider(wallet);
       const program = getProgram(provider, idl as any);
@@ -559,12 +601,12 @@ const Dashboard = ({
         program,
         guestPda,
         wallet.publicKey,
-        { temp: temperature, lighting: lightingMode, brightness, musicOn, services: [], raw_response: "" },
+        { target_temp_c, lighting: lightingMode, brightness, musicOn, services: [], raw_response: "" },
         { 
           name: guestName, 
           loyaltyPoints: profileData?.loyaltyPoints?.toNumber?.() || Number(profileData?.loyaltyPoints) || 0, 
           history: [],
-          currentPreferences: { temp: temperature, lighting: lightingMode, brightness, musicOn }
+          currentPreferences: { target_temp_c, lighting: lightingMode, brightness, musicOn }
         },
         guestName
       );
@@ -601,6 +643,7 @@ const Dashboard = ({
       alert(`Error initializing identity: ${e.message}`);
     } finally {
       setIsSaving(false);
+      refreshGroundTruth(); // Confirm backend/MQTT state is in sync after manual change
     }
   };
 
@@ -760,7 +803,7 @@ const Dashboard = ({
         <p className="text-zinc-500 text-[10px] font-mono uppercase tracking-widest mb-3">Environment</p>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[
-            { icon: Thermometer, label: "Temperature", value: `${temperature}°C`, color: "text-accent" },
+            { icon: Thermometer, label: "Climate", value: `${target_temp_c}°C · ${nestMode}`, color: "text-accent" },
             { icon: Lightbulb, label: "Lighting", value: lightingMode, color: "text-accent" },
             { icon: Music, label: "Ambient", value: musicOn ? "Playing" : "Off", color: "text-accent" },
             { icon: Shield, label: "Privacy", value: "Active", color: "text-emerald-500" },
@@ -948,7 +991,7 @@ const Dashboard = ({
             <Card
               key={scene.name}
               onClick={() => {
-                setTemperature(scene.temp);
+                setTargetTempC(scene.temp);
                 setBrightness(scene.bright);
                 setLightingMode(scene.light);
               }}
@@ -964,19 +1007,19 @@ const Dashboard = ({
         </div>
       </motion.div>
 
-      {/* Temperature */}
+      {/* target_temp_c */}
       <motion.div variants={itemVariants}>
         <Card className="space-y-4 p-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3 text-accent">
               <Thermometer size={20} />
-              <span className="font-bold text-base">Temperature</span>
+              <span className="font-bold text-base">target_temp_c</span>
             </div>
-            <span className="text-2xl font-mono font-bold">{temperature}°C</span>
+            <span className="text-2xl font-mono font-bold">{target_temp_c}°C</span>
           </div>
           <input
-            type="range" min={16} max={30} step={0.5} value={temperature}
-            onChange={(e) => setTemperature(parseFloat(e.target.value))}
+            type="range" min={16} max={30} step={0.5} value={target_temp_c}
+            onChange={(e) => setTargetTempC(parseFloat(e.target.value))}
             className="w-full accent-[#C4A97A]"
           />
         </Card>
@@ -1195,7 +1238,12 @@ const Dashboard = ({
       <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-900/50">
         <div className="flex items-center gap-3">
           <Logo className="w-8 h-8" />
-          <span className="text-white/80 text-sm font-bold uppercase tracking-wider">ORIN</span>
+          <div className="flex flex-col">
+            <span className="text-white/80 text-sm font-bold uppercase tracking-wider leading-none">ORIN</span>
+            <span className="text-accent font-mono text-[9px] uppercase tracking-widest mt-0.5 animate-pulse">
+              {guestPda ? `ROOM_${guestPda.toBase58().slice(0, 4)}` : "ROOM_INIT"}
+            </span>
+          </div>
         </div>
         <StatusBadge active={true} label="ORIN Active" />
       </div>

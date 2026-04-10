@@ -1,5 +1,5 @@
-﻿import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "node:crypto";
+import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "crypto";
 
 type GuestContext = {
   name: string;
@@ -14,7 +14,7 @@ type VoiceRequest = {
 };
 
 type OrinPayload = {
-  temp: number;
+  target_temp_c: number;
   lighting: "warm" | "cold" | "ambient";
   services: string[];
   raw_response: string;
@@ -54,9 +54,9 @@ const SYSTEM_PROMPT = `You are ORIN, the Elite Concierge and Luxury Property Man
 - Your technology must feel natural, fast, and exclusive.`;
 
 const FAST_INTENTS = [
-  { keys: ["hola", "buenas"], reply: "Hola, estoy en linea. ¿En que puedo ayudar?" },
-  { keys: ["ayuda", "help"], reply: "Puedo ajustar luz, clima o coordinar servicios. ¿Que necesitas?" },
-  { keys: ["gracias", "thank"], reply: "Un placer. ¿Algo mas?" },
+  { keys: ["hola", "buenas"], reply: "Hola, estoy en linea. ¿En qué puedo ayudar?" },
+  { keys: ["ayuda", "help"], reply: "Puedo ajustar luz, clima o coordinar servicios. ¿Qué necesitas?" },
+  { keys: ["gracias", "thank"], reply: "Un placer. ¿Algo más?" },
 ];
 
 function stableStringify(value: unknown): string {
@@ -81,12 +81,12 @@ function parsePayloadFromText(text: string): OrinPayload {
   const parsed = JSON.parse(trimmed.slice(start, end + 1));
 
   const tempValue =
-    typeof parsed.temp === "number"
-      ? parsed.temp
-      : typeof parsed.temp === "string"
-      ? Number(parsed.temp.replace(",", "."))
+    typeof parsed.target_temp_c === "number"
+      ? parsed.target_temp_c
+      : typeof parsed.target_temp_c === "string"
+      ? Number(parsed.target_temp_c.replace(",", "."))
       : Number.NaN;
-  if (!Number.isFinite(tempValue)) throw new Error("Invalid temp");
+  if (!Number.isFinite(tempValue)) throw new Error("Invalid target_temp_c");
 
   const lightingRaw = String(parsed.lighting ?? "").toLowerCase().trim();
   const lighting = (["warm", "cold", "ambient"].includes(lightingRaw) ? lightingRaw : "ambient") as
@@ -101,7 +101,7 @@ function parsePayloadFromText(text: string): OrinPayload {
   const rawResponse = clampWords(String(parsed.raw_response ?? "Understood. Your request is confirmed."), 15);
 
   return {
-    temp: tempValue,
+    target_temp_c: tempValue,
     lighting,
     services,
     raw_response: rawResponse,
@@ -153,7 +153,7 @@ async function askGroq(userInput: string, guestContext: GuestContext): Promise<O
     `History: ${guestContext.history.join(" | ")}`,
     `User command: ${userInput}`,
     "Return ONLY strict JSON with exact schema. Keep raw_response under 15 words:",
-    '{"temp":number,"lighting":"warm"|"cold"|"ambient","services":string[],"raw_response":string}',
+    '{"target_temp_c":number,"lighting":"warm"|"cold"|"ambient","services":string[],"raw_response":string}',
     "No markdown, no extra text.",
   ].join("\n");
 
@@ -215,7 +215,7 @@ export async function POST(req: NextRequest) {
       if (!fallback) throw error;
 
       payload = {
-        temp: 22,
+        target_temp_c: 22,
         lighting: "ambient",
         services: [],
         raw_response: fallback,

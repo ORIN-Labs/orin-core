@@ -36,7 +36,7 @@ export function getRelayOpts() {
 }
 
 export interface RoomPreferences {
-  temp: number;
+  target_temp_c: number;
   lighting: "warm" | "cold" | "ambient";
   brightness: number;
   musicOn: boolean;
