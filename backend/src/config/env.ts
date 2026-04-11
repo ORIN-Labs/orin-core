@@ -54,6 +54,14 @@ const envSchema = z.object({
       { message: "Each entry in ALLOWED_ORIGIN must start with http or https" }
     ),
   API_KEY: z.string().min(1).default("replace_with_a_secure_api_key"),
+
+  /**
+   * Path to the Firebase Admin SDK service account JSON file.
+   * Required for Firestore writes. Falls back to Application Default Credentials
+   * (e.g. on Google Cloud / Railway) if not set.
+   * Example: /home/firebase-adminsdk.json
+   */
+  FIREBASE_KEY: z.string().optional(),
 });
 
 type ParsedEnv = z.infer<typeof envSchema>;

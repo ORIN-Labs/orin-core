@@ -39,7 +39,7 @@ export interface RoomDeviceState {
   lighting: "warm" | "cold" | "ambient";
   /** Google Nest climate */
   nest: {
-    target_temp_c: number;
+    temp: number;
     mode: "HEAT" | "COOL" | "AUTO" | "OFF";
   };
   /** Music player — name from the MUSIC_LIST, or "" when off */

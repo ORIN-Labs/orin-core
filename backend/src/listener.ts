@@ -144,6 +144,9 @@ export function startSecureGatewayListener(): number {
             cold: "#99CCFF",
             ambient: "#FFFFFF",
           };
+          // Resolve temperature: AI output uses `temp`, frontend direct payload uses `target_temp_c`
+          const resolvedTemp: number = payload.temp ?? (payload as any).target_temp_c ?? 22;
+
           const deviceSnapshot: RoomDeviceState = {
             roomId: "Room_"+guestPda.slice(0,4),
             hue: {
@@ -153,8 +156,8 @@ export function startSecureGatewayListener(): number {
             },
             lighting: payload.lighting,
             nest: {
-              target_temp_c: payload.temp,
-              mode: payload.temp >= 24 ? "COOL" : "HEAT",
+              temp: resolvedTemp,
+              mode: resolvedTemp >= 24 ? "COOL" : "HEAT",
             },
             music: payload.music ?? "",
             lastUpdatedAt: new Date().toISOString(),

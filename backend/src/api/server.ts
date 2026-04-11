@@ -15,6 +15,7 @@ import { generateSha256Hash } from "../shared/hash";
 import { getFeePayerKeypair, relayTransaction } from "../shared/feePayer";
 import { RPC_ENDPOINT } from "../shared/constants";
 import { FAST_INTENTS } from "../config/fast_intents";
+import { getGuestProfile, updateGuestAvatar } from "../state/FirestoreService";
 
 /**
  * ORIN Production API Gateway
@@ -359,9 +360,15 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
  */
 interface ManualPreferencesBody {
   guestPda: string;
+  /**
+   * Full preferences payload. Must include:
+   *   - brightness: number (0–100, required)
+   *   - music: string (track name or "" for no music, optional defaults to "")
+   *   - lighting: "warm" | "cold" | "ambient"
+   *   - temp: number
+   */
   preferences: Record<string, unknown>;
   guestContext?: GuestContext;
-  brightness?: number; // Optional input parameter
 }
 
 app.post<{ Body: ManualPreferencesBody }>("/api/v1/preferences", async (request, reply) => {
@@ -374,24 +381,32 @@ app.post<{ Body: ManualPreferencesBody }>("/api/v1/preferences", async (request,
     return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
   }
 
-  const { guestPda, preferences, guestContext, brightness } = request.body || {};
+  const { guestPda, preferences, guestContext } = request.body || {};
 
-  // Ensure payload has the correct wrapper and preferences is an actual object
+  // Validate required fields
   if (!guestPda || !preferences || typeof preferences !== "object" || Array.isArray(preferences)) {
     reqLogger.error("invalid_preferences_body");
     return reply.status(400).send({ error: "Invalid body. Required: guestPda and preferences object." });
   }
 
-  // If the frontend explicitly passed an optional brightness value, merge it into the core preferences
-  if (brightness !== undefined) {
-    preferences.brightness = brightness;
+  // brightness is required inside preferences
+  const brightness = preferences.brightness;
+  if (typeof brightness !== "number" || (brightness as number) < 0 || (brightness as number) > 100) {
+    return reply.status(400).send({
+      error: "Invalid body. preferences.brightness is required and must be a number between 0 and 100.",
+    });
+  }
+
+  // music defaults to "" if not provided (no music)
+  if (typeof preferences.music !== "string") {
+    preferences.music = "";
   }
 
   // Hash ONLY the preferences canonical body — matching the AI agent output schema
   const hashHex = generateSha256Hash(preferences).toString("hex");
 
   await stateProvider.setDirectPayload(hashHex, preferences);
-  reqLogger.info({ guest_pda: guestPda, hash: hashHex }, "direct_payload_stored");
+  reqLogger.info({ guest_pda: guestPda, hash: hashHex, brightness, music: preferences.music }, "direct_payload_stored");
 
   return reply.status(200).send({
     status: "success",
@@ -536,7 +551,7 @@ app.post<{ Body: TtsBody }>("/api/v1/tts", async (request, reply) => {
  * Response schema:
  *   roomId        — The logical room identifier ("room101" in MVP)
  *   hue           — Philips Hue state: { color, brightness, on }
- *   nest          — Google Nest state: { target_temp_c, mode }
+ *   nest          — Google Nest state: { temp, mode }
  *   lastUpdatedAt — ISO-8601 timestamp of the last confirmed update
  *   lastGuestPda  — Solana PDA of the guest who triggered the last change
  *
@@ -585,7 +600,7 @@ app.get<{ Querystring: { guestPda?: string; roomId?: string } }>(
       const result = snapshot ?? {
         roomId,
         hue: { color: "#FFFFFF", brightness: 80, on: true },
-        nest: { target_temp_c: 22, mode: "AUTO" },
+        nest: { temp: 22, mode: "AUTO" },
         music: "",
         lastUpdatedAt: null,
         lastGuestPda: null,
@@ -597,6 +612,130 @@ app.get<{ Querystring: { guestPda?: string; roomId?: string } }>(
       const message = error instanceof Error ? error.message : "Unknown error";
       reqLogger.error({ err: message }, "device_status_read_error");
       return reply.status(500).send({ error: "Failed to read device state", details: message });
+    }
+  }
+);
+
+
+/**
+ * GUEST PROFILE ENDPOINT
+ * -------------------------------------------------------------
+ * Reads a guest's Firestore profile (guestPda, avatarUrl, createdAt, lastSeenAt)
+ * and their N most recent preference sessions (lighting, hue, nest, music, etc.).
+ *
+ * This is the CRM/analytics layer — Redis serves real-time state, Firestore
+ * serves historical preferences and identity data.
+ *
+ * Query Parameters:
+ *   guestPda  (required) — The guest's Solana public key
+ *   limit     (optional) — Max sessions to return, default 10, max 50
+ *
+ * Example:
+ *   GET /api/v1/guest/profile?guestPda=7h6Q5TPy...
+ *
+ * TODO: Future implementation will include user signature verification.
+ */
+app.get<{ Querystring: { guestPda?: string; limit?: string } }>(
+  "/api/v1/guest/profile",
+  async (request, reply) => {
+    const reqLogger = request.reqLogger;
+
+    // Security Gate
+    const apiKey = request.headers["x-api-key"];
+    if (apiKey !== env.API_KEY) {
+      reqLogger.warn({ origin: request.headers.origin }, "unauthorized_guest_profile_access");
+      return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+    }
+
+    const { guestPda, limit: limitStr } = request.query;
+    if (!guestPda) {
+      return reply.status(400).send({ error: "Query parameter 'guestPda' is required." });
+    }
+
+    // Clamp limit to a safe range
+    const limit = Math.min(Math.max(parseInt(limitStr ?? "10", 10) || 10, 1), 50);
+
+    try {
+      const result = await getGuestProfile(guestPda, limit);
+
+      if (!result) {
+        return reply.status(404).send({
+          error: "Guest not found",
+          message: "No Firestore profile exists for this guestPda. Guest must complete at least one verified command first.",
+        });
+      }
+
+      reqLogger.info(
+        { guestPda, sessionsReturned: result.preferences.length },
+        "guest_profile_queried"
+      );
+
+      return reply.send({
+        status: "ok",
+        guestPda,
+        profile: result.profile,
+        preferences: result.preferences,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      reqLogger.error({ guestPda, err: message }, "guest_profile_query_error");
+      return reply.status(500).send({ error: "Failed to query guest profile", details: message });
+    }
+  }
+);
+
+/**
+ * GUEST AVATAR UPDATE ENDPOINT
+ * -------------------------------------------------------------
+ * Updates the avatar URL for a specific guest in Firestore.
+ *
+ * Body Parameters:
+ *   guestPda   (required) — The guest's Solana public key
+ *   avatarUrl  (required) — The new avatar URL link
+ *
+ * Example:
+ *   POST /api/v1/guest/avatar
+ *   { "guestPda": "7h6Q...", "avatarUrl": "https://..." }
+ *
+ * TODO: Future implementation will include user signature verification.
+ */
+interface GuestAvatarBody {
+  guestPda: string;
+  avatarUrl: string;
+}
+
+app.post<{ Body: GuestAvatarBody }>(
+  "/api/v1/guest/avatar_update",
+  async (request, reply) => {
+    const reqLogger = request.reqLogger;
+
+    // Security Gate
+    const apiKey = request.headers["x-api-key"];
+    if (apiKey !== env.API_KEY) {
+      reqLogger.warn({ origin: request.headers.origin }, "unauthorized_guest_avatar_update_access");
+      return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+    }
+
+    const { guestPda, avatarUrl } = request.body;
+    if (!guestPda || !avatarUrl) {
+      return reply.status(400).send({ error: "Body parameters 'guestPda' and 'avatarUrl' are required." });
+    }
+
+    try {
+      await updateGuestAvatar(guestPda, avatarUrl);
+
+      reqLogger.info({ guestPda, avatarUrl }, "guest_avatar_update_processed");
+
+      return reply.send({
+        status: "ok",
+        message: "Guest avatar updated successfully.",
+        guestPda,
+        avatarUrl,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      reqLogger.error({ guestPda, err: message }, "guest_avatar_update_error");
+      return reply.status(500).send({ error: "Failed to update guest avatar", details: message });
     }
   }
 );

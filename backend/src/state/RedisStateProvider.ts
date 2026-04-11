@@ -1,6 +1,7 @@
 import Redis from "ioredis";
 import { getEnv } from "../config/env";
 import { IStateProvider, PendingCommand, RoomDeviceState, UserPreferences, ValidatedState } from "./IStateProvider";
+import { syncGuestPreferencesToFirestore } from "./FirestoreService";
 
 /**
  * Redis-backed state provider
@@ -79,6 +80,13 @@ export class RedisStateProvider implements IStateProvider {
   async setDeviceState(roomId: string, state: RoomDeviceState): Promise<void> {
     // 24-hour TTL: persists across restarts, auto-expires stale rooms.
     await this.redis.set(`orin:device_state:${roomId}`, JSON.stringify(state), "EX", 86400);
+
+    // Fire-and-forget: sync to Firestore for long-term guest preference history.
+    // Uses lastGuestPda as the Firestore document owner. Non-blocking — failures
+    // are logged internally and never propagate to the caller.
+    if (state.lastGuestPda) {
+      syncGuestPreferencesToFirestore(state.lastGuestPda, state).catch(() => {/* handled inside */});
+    }
   }
 
   async getDeviceState(roomId: string): Promise<RoomDeviceState | null> {
