@@ -322,7 +322,7 @@ const OnboardingFlow = ({ onComplete, onBack }: { onComplete: (name: string) => 
               className={cn(
                 "w-full py-4.5 md:py-4 rounded-xl font-bold transition-all text-sm md:text-base",
                 name.trim()
-                  ? "bg-accent text-black accent-glow shadow-[0_0_20px_rgba(196,169,122,0.2)]"
+                  ? "bg-accent text-black accent-glow"
                   : "bg-card/50 text-text-muted/40 cursor-not-allowed border border-border/50"
               )}
             >
@@ -1040,7 +1040,7 @@ const Dashboard = ({
               }}
               className={cn(
                 "flex flex-col items-center gap-2 md:gap-3 p-3 md:p-5 transition-all cursor-pointer",
-                lightingMode === scene.light ? "border-accent bg-accent/10 shadow-[0_0_15px_rgba(196,169,122,0.1)]" : "bg-card border-border hover:bg-card-hover"
+                lightingMode === scene.light ? "border-accent bg-accent/10 accent-glow" : "bg-card border-border hover:bg-card-hover"
               )}
             >
               <scene.icon size={20} className={lightingMode === scene.light ? "text-accent" : "text-text-muted"} />
@@ -1352,14 +1352,14 @@ const Dashboard = ({
                 activeTab === tab.id ? "text-accent" : "text-text-muted hover:text-text-secondary"
               )}
             >
-              <tab.icon size={20} className={cn("transition-all duration-300", activeTab === tab.id ? "scale-110 drop-shadow-[0_0_8px_rgba(196,169,122,0.4)]" : "group-hover:scale-110")} />
+              <tab.icon size={20} className={cn("transition-all duration-300", activeTab === tab.id ? "scale-110 drop-shadow-[0_0_8px_var(--color-accent)]" : "group-hover:scale-110")} />
               <span className={cn("text-[8px] md:text-[9px] font-mono uppercase tracking-[0.2em] transition-all", activeTab === tab.id ? "opacity-100" : "opacity-60")}>
                 {tab.label}
               </span>
               {activeTab === tab.id && (
                 <motion.div
                   layoutId="activeTab"
-                  className="absolute -bottom-0.5 w-1 h-1 rounded-full bg-accent shadow-[0_0_12px_rgba(196,169,122,0.8)]"
+                  className="absolute -bottom-0.5 w-1 h-1 rounded-full bg-accent shadow-[0_0_12px_var(--color-accent)]"
                 />
               )}
             </button>
