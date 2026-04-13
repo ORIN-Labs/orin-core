@@ -70,7 +70,7 @@ export const useTheme = () => React.useContext(ThemeContext);
 
 // Cartesia Startups Logo (Grant Compliance Requirement)
 const CartesiaLogo = () => (
-  <a href="https://cartesia.ai" target="_blank" rel="noopener noreferrer" className="opacity-40 hover:opacity-70 transition-opacity">
+  <a href="https://cartesia.ai" target="_blank" rel="noopener noreferrer" className="text-text-muted opacity-60 hover:opacity-100 transition-opacity">
     <div className="flex items-center gap-1.5">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
@@ -184,13 +184,13 @@ const LandingPage = ({ onConnect }: { onConnect: () => void }) => {
         <div className="space-y-3 md:space-y-4">
           <h1 className="text-6xl md:text-8xl font-light tracking-tighter font-serif leading-none">ORIN</h1>
           <p className="text-accent font-mono text-[9px] md:text-xs uppercase tracking-[0.4em] md:tracking-[0.6em] font-bold">Your Personal AI Concierge</p>
-          <p className="text-text-secondary text-base md:text-xl font-light font-serif opacity-40 italic mt-4">
+          <p className="text-text-secondary text-base md:text-xl font-light font-serif opacity-60 italic mt-4">
             Every space knows your song.
           </p>
         </div>
       </motion.div>
 
-      <motion.div variants={itemVariants} className="w-full max-w-[280px] xs:max-w-sm space-y-6 mt-10 md:mt-12">
+      <motion.div variants={itemVariants} className="w-full max-w-[280px] sm:max-w-sm space-y-6 mt-10 md:mt-12">
         <div className="flex flex-col items-center gap-4">
           {/* Privy Login — Sole Auth Method (Email, X, Wallet) */}
           <button
@@ -207,13 +207,13 @@ const LandingPage = ({ onConnect }: { onConnect: () => void }) => {
         </div>
       </motion.div>
 
-      <motion.div variants={itemVariants} className="mt-16 md:mt-24 grid grid-cols-1 xs:grid-cols-3 gap-8 md:gap-12 w-full max-w-lg">
+      <motion.div variants={itemVariants} className="mt-16 md:mt-24 grid grid-cols-1 sm:grid-cols-3 gap-8 md:gap-12 w-full max-w-2xl px-4">
         {[
           { icon: Brain, label: "AI Agent" },
           { icon: Fingerprint, label: "On-Chain Identity" },
           { icon: Shield, label: "Privacy First" },
         ].map((item) => (
-          <div key={item.label} className="flex flex-col items-center gap-2 md:gap-3 opacity-25 hover:opacity-100 transition-opacity duration-500">
+          <div key={item.label} className="flex flex-col items-center gap-2 md:gap-3 opacity-50 hover:opacity-100 transition-opacity duration-500">
             <item.icon className="w-[18px] h-[18px] md:w-5 md:h-5 text-text-primary" />
             <span className="text-[9px] font-mono uppercase tracking-[0.2em] text-text-muted">{item.label}</span>
           </div>
@@ -270,7 +270,7 @@ const OnboardingFlow = ({ onComplete, onBack }: { onComplete: (name: string) => 
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="min-h-screen flex flex-col items-center justify-center p-6 xs:p-10 max-w-lg mx-auto relative overflow-hidden"
+      className="min-h-screen flex flex-col items-center justify-center p-6 sm:p-10 max-w-lg mx-auto relative overflow-hidden"
     >
       {/* Back Button */}
       <button
@@ -280,7 +280,7 @@ const OnboardingFlow = ({ onComplete, onBack }: { onComplete: (name: string) => 
         <div className="w-10 h-10 rounded-full bg-card/50 border border-border flex items-center justify-center group-hover:border-accent/40 transition-all">
           <ChevronLeft size={18} />
         </div>
-        <span className="text-[10px] font-mono uppercase tracking-[0.2em] hidden xs:inline">Back</span>
+        <span className="text-[10px] font-mono uppercase tracking-[0.2em] hidden sm:inline">Back</span>
       </button>
 
       <AnimatePresence mode="wait">
@@ -315,7 +315,7 @@ const OnboardingFlow = ({ onComplete, onBack }: { onComplete: (name: string) => 
 
             <button
               onClick={() => setStep(step + 1)}
-              className="w-full xs:w-auto bg-accent text-[#332F2E] px-10 py-3.5 md:py-3 rounded-xl font-bold md:font-medium hover:bg-accent-light transition-all accent-glow text-sm"
+              className="w-full sm:w-auto bg-accent text-[#332F2E] px-10 py-3.5 md:py-3 rounded-xl font-bold md:font-medium hover:bg-accent-light transition-all accent-glow text-sm"
             >
               {step < 2 ? "Continue" : "Register Identity"} <ArrowRight size={14} className="inline ml-1" />
             </button>
@@ -1421,7 +1421,7 @@ const Dashboard = ({
 export default function App() {
   const { connected, publicKey, disconnect } = useWallet();
   const wallet = useAnchorWallet();
-  const { logout: privyLogout, authenticated: privyAuthenticated } = usePrivy();
+  const { user, logout: privyLogout, authenticated: privyAuthenticated } = usePrivy();
   const [view, setView] = useState<View>("landing");
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -1432,6 +1432,23 @@ export default function App() {
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [hasAttemptedSync, setHasAttemptedSync] = useState(false);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+
+  // Robust Solana Address Detection (Priority: Adapter > Privy User)
+  const derivedAddress = useMemo(() => {
+    if (publicKey) return publicKey.toBase58();
+    const solAccount = user?.linkedAccounts?.find(
+      (a: any) => (a.type === 'wallet' && a.chainType === 'solana') || (a.type === 'solana_wallet')
+    );
+    return (solAccount as any)?.address || "";
+  }, [publicKey, user]);
+
+  const effectivePublicKey = useMemo(() => {
+    if (publicKey) return publicKey;
+    if (derivedAddress) {
+      try { return new PublicKey(derivedAddress); } catch (e) { return null; }
+    }
+    return null;
+  }, [publicKey, derivedAddress]);
 
   // Load theme from local storage as early as possible
   useEffect(() => {
@@ -1464,56 +1481,63 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Detect wallet connection → navigate to onboarding or dashboard
+  // Detect auth state → navigate to onboarding or dashboard
   useEffect(() => {
-    if (!isLoading && connected && publicKey && wallet) {
-      const addr = publicKey.toBase58();
-      setWalletAddress(addr);
+    // We proceed if we are NOT loading AND we have a valid Solana address (from either Privy or Adapter)
+    if (!isLoading && privyAuthenticated && derivedAddress) {
+      if (walletAddress !== derivedAddress) {
+        setWalletAddress(derivedAddress);
+      }
 
       // Check if returning user
       const savedName = localStorage.getItem("orin_guest_name");
       if (savedName) {
         setGuestName(savedName);
-        setView("dashboard");
+        if (view === "landing" || view === "onboarding") {
+           setView("dashboard");
+        }
       } else if (view === "landing") {
         setView("onboarding");
       }
     }
-  }, [isLoading, connected, publicKey, wallet]);
+  }, [isLoading, privyAuthenticated, derivedAddress, walletAddress, view]);
 
   const syncProfile = useCallback(async (nameOverride?: string) => {
-    if (!connected || !publicKey || !wallet) return;
+    // Only block if we have NO address. We allow profile fetch even if wallet object isn't ready for signing yet.
+    if (!effectivePublicKey) return;
     
     setIsProfileLoading(true);
     try {
       const name = nameOverride || localStorage.getItem("orin_guest_name") || "";
-      const { pda } = deriveGuestPda(name, publicKey);
-      const provider = getProvider(wallet);
-      const program = getProgram(provider, idl as any);
-      const profile = await fetchGuestProfile(program, pda);
+      const { pda } = deriveGuestPda(name, effectivePublicKey);
       
+      // If we have an Anchor wallet, we can perform full IDL-based program fetches
+      if (wallet) {
+        const provider = getProvider(wallet);
+        const program = getProgram(provider, idl as any);
+        const profile = await fetchGuestProfile(program, pda);
+        if (profile) setProfileData(profile);
+      }
+      
+      // Always try the public API fetch (doesn't require a signer)
       try {
         const apiProfile = await fetchGuestProfileApi(pda.toBase58());
         if (apiProfile?.profile?.avatarUrl) {
-           localStorage.setItem(`orin_profile_img_${publicKey.toBase58()}`, apiProfile.profile.avatarUrl);
+           localStorage.setItem(`orin_profile_img_${effectivePublicKey.toBase58()}`, apiProfile.profile.avatarUrl);
+        }
+        if (apiProfile?.profile && !profileData) {
+           // Fallback state if Anchor fetch is still pending
+           setProfileData(apiProfile.profile);
         }
       } catch (err) {
         console.warn("[ORIN] Failed to fetch avatar from profile API:", err);
-      }
-      
-      if (profile) {
-        setProfileData(profile);
-        if (profile.name && profile.name !== name) {
-          setGuestName(profile.name);
-          localStorage.setItem("orin_guest_name", profile.name);
-        }
       }
     } catch (e) {
       console.error("Profile sync failed", e);
     } finally {
       setIsProfileLoading(false);
     }
-  }, [connected, publicKey, wallet]);
+  }, [effectivePublicKey, wallet, profileData]);
 
   // Initial Sync — Fixed to avoid infinite RPC retries
   useEffect(() => {
@@ -1524,11 +1548,12 @@ export default function App() {
   }, [connected, publicKey, wallet, syncProfile, profileData, isProfileLoading, hasAttemptedSync]);
 
   // Detect wallet disconnect → go back to landing
+  // Only kick back if BOTH are false to handle bridging delays
   useEffect(() => {
-    if (!isLoading && !connected && view !== "landing") {
+    if (!isLoading && !connected && !privyAuthenticated && view !== "landing") {
       setView("landing");
     }
-  }, [connected, isLoading]);
+  }, [connected, privyAuthenticated, isLoading, view]);
 
   const handleOnboardingComplete = (name: string) => {
     setGuestName(name);
