@@ -78,9 +78,21 @@ export const useTheme = () => React.useContext(ThemeContext);
 const CartesiaLogo = () => (
   <a href="https://cartesia.ai" target="_blank" rel="noopener noreferrer" className="text-text-muted opacity-60 hover:opacity-100 transition-opacity">
     <div className="flex items-center gap-1.5">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M8 12h8M12 8v8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <svg width="14" height="14" viewBox="0 0 19 19" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="6" y="1" width="3" height="3" fill="currentColor"/>
+        <rect x="12" y="1" width="3" height="3" fill="currentColor"/>
+        <rect x="3" y="4" width="3" height="3" fill="currentColor"/>
+        <rect x="9" y="4" width="3" height="3" fill="currentColor"/>
+        <rect x="15" y="4" width="3" height="3" fill="currentColor"/>
+        <rect y="7" width="3" height="3" fill="currentColor"/>
+        <rect x="6" y="7" width="3" height="3" fill="currentColor"/>
+        <rect y="10" width="3" height="3" fill="currentColor"/>
+        <rect x="6" y="10" width="3" height="3" fill="currentColor"/>
+        <rect x="3" y="13" width="3" height="3" fill="currentColor"/>
+        <rect x="9" y="13" width="3" height="3" fill="currentColor"/>
+        <rect x="15" y="13" width="3" height="3" fill="currentColor"/>
+        <rect x="6" y="16" width="3" height="3" fill="currentColor"/>
+        <rect x="12" y="16" width="3" height="3" fill="currentColor"/>
       </svg>
       <span className="text-[8px] font-mono uppercase tracking-[0.2em]">Cartesia Startups</span>
     </div>
@@ -238,7 +250,7 @@ const LandingPage = () => {
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="min-h-screen flex flex-col items-center justify-center p-6 md:p-12 max-w-2xl mx-auto text-center"
+      className="flex-1 flex flex-col items-center justify-center p-6 md:p-12 max-w-2xl mx-auto text-center"
     >
       <motion.div variants={itemVariants} className="flex flex-col items-center space-y-6 md:space-y-8">
         <Logo className="w-24 h-24 md:w-32 md:h-32 mb-2" />
@@ -331,7 +343,7 @@ const OnboardingFlow = ({ onComplete, onBack }: { onComplete: (name: string) => 
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="min-h-screen flex flex-col items-center justify-center p-6 sm:p-10 max-w-lg mx-auto relative overflow-hidden"
+      className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10 max-w-lg mx-auto relative overflow-hidden"
     >
       {/* Back Button */}
       <button
@@ -616,15 +628,27 @@ const Dashboard = ({
 
   // On-chain state listener (WebSocket)
   useEffect(() => {
-    if (!wallet.publicKey || !walletAddress || !guestPda) return;
+    // Audit: Use effectivePublicKey to ensure listeners start even if the adapter isn't connected yet (Handshake resilience)
+    if (!effectivePublicKey || !walletAddress || !guestPda) return;
     try {
       const conn = getConnection();
       const subId = conn.onAccountChange(guestPda, async () => {
         console.log("[ORIN] On-chain profile change detected. Re-syncing...");
-        const provider = getProvider(wallet);
-        const program = getProgram(provider, idl as Idl);
-        const profile = await fetchGuestProfile(program, guestPda);
-        if (profile) setProfileData(profile);
+        
+        if (wallet) {
+          const provider = getProvider(wallet);
+          const program = getProgram(provider, idl as Idl);
+          const profile = await fetchGuestProfile(program, guestPda);
+          if (profile) setProfileData(profile);
+        } else {
+          // Handshake Fallback: If heavy wallet isn't ready, use Public API for hydration
+          try {
+            const apiProfile = await fetchGuestProfileApi(guestPda.toBase58());
+            if (apiProfile?.profile) setProfileData(apiProfile.profile);
+          } catch (err) {
+            console.warn("[ORIN] WebSocket partial handshake: re-sync API fallback failed", err);
+          }
+        }
       }, "confirmed");
       return () => {
         conn.removeAccountChangeListener(subId);
@@ -632,10 +656,11 @@ const Dashboard = ({
     } catch (e) {
       console.warn("[ORIN] Failed to setup WebSocket listener", e);
     }
-  }, [guestPda, setProfileData, wallet, walletAddress]);
+  }, [guestPda, setProfileData, wallet, walletAddress, effectivePublicKey]);
 
   const handleVoiceCommand = useCallback(async (text: string) => {
-    if (!text.trim() || !wallet.publicKey) return;
+    // We only require a valid Solana address (from Privy or Wallet Adapter) to move forward
+    if (!text.trim() || !effectivePublicKey) return;
     setIsProcessingVoice(true);
     
     setChatInput("");
@@ -670,21 +695,22 @@ const Dashboard = ({
         }
       }).catch(err => console.warn("[ORIN] Fast Voice / ACK failed", err));
 
-      const activePrefs: RoomPreferences = {
-        temp,
-        lighting: lightingMode,
-        brightness,
-        music: musicOn ? musicTrack : ""
-      };
-      
-      if (guestPda) {
+      // 2. Heavy Block — Only proceed to blockchain sync if the wallet signer is ready
+      if (guestPda && wallet) {
+        const activePrefs: RoomPreferences = {
+          temp,
+          lighting: lightingMode,
+          brightness,
+          music: musicOn ? musicTrack : ""
+        };
+        
         const provider = getProvider(wallet);
         const program = getProgram(provider, idl as Idl);
         
         const res = await saveVoicePreferences(
           program,
           guestPda,
-          wallet.publicKey!,
+          effectivePublicKey,
           text,
           activePrefs,
           { 
@@ -727,6 +753,8 @@ const Dashboard = ({
         if (sigStr) {
           appendChatMessage("orin", `Signature confirmed: ${sigStr.slice(0, 8)}...`);
         }
+      } else {
+        console.warn("[ORIN] Wallet signer not ready. Skipping heavy on-chain sync.");
       }
     } catch (e: unknown) {
       replaceChatMessage(processingMessageId, `API Error: ${getErrorMessage(e)}`);
@@ -758,7 +786,10 @@ const Dashboard = ({
   };
 
   const handleSaveSetup = async () => {
-    if (!wallet.publicKey || !guestPda) return;
+    if (!effectivePublicKey || !guestPda || !wallet) {
+      if (!wallet) alert("Wallet connection still initializing. Please wait a moment.");
+      return;
+    }
     setIsSaving(true);
     setInteractionTimestamp();
     try {
@@ -775,7 +806,7 @@ const Dashboard = ({
       const res = await saveManualPreferences(
         program,
         guestPda,
-        wallet.publicKey,
+        effectivePublicKey,
         manualPrefs,
         guestName
       );
@@ -790,17 +821,20 @@ const Dashboard = ({
   };
 
   const handleInitializeIdentity = async () => {
-    if (!wallet.publicKey) return;
+    if (!effectivePublicKey || !wallet) {
+       if (!wallet) alert("Wallet connection still initializing. Please wait a moment.");
+       return;
+    }
     setIsSaving(true);
     try {
-      const { pda, identifierHash } = deriveGuestPda(guestName, wallet.publicKey);
+      const { pda, identifierHash } = deriveGuestPda(guestName, effectivePublicKey);
       const provider = getProvider(wallet);
       const program = getProgram(provider, idl as Idl);
 
       const sig = await initializeGuestOnChain(
         program,
         pda,
-        wallet.publicKey,
+        effectivePublicKey,
         identifierHash,
         guestName,
         getRelayOpts()
@@ -1087,6 +1121,11 @@ const Dashboard = ({
           </motion.div>
         )}
         <div ref={messagesEndRef} />
+        
+        {/* Compliance Logo in Chat Stream */}
+        <div className="flex justify-center py-4 opacity-50">
+          <CartesiaLogo />
+        </div>
       </div>
 
       {/* Input Area — Fixed at bottom of container */}
@@ -1405,33 +1444,27 @@ const Dashboard = ({
   ];
 
   return (
-    <div className="min-h-screen bg-background text-text-primary flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden bg-background text-text-primary">
       {/* Top Bar — Refactored for Mobile */}
       <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4 border-b border-border/50 flex-shrink-0 bg-background/80 backdrop-blur-md z-[60]">
         <div className="flex items-center gap-2 md:gap-3">
           <Logo className="w-7 h-7 md:w-8 md:h-8" />
           <div className="flex flex-col">
             <span className="text-text-secondary text-[10px] md:text-sm font-bold uppercase tracking-wider leading-none">ORIN</span>
-            <span className="text-accent font-mono text-[8px] md:text-[9px] uppercase tracking-widest mt-0.5 animate-pulse truncate max-w-[80px] md:max-w-none">
-              {guestPda ? `ROOM_${guestPda.toBase58().slice(0, 4)}` : "ROOM_INIT"}
-            </span>
+            <span className="text-text-muted text-[8px] md:text-[10px] uppercase tracking-tighter">Your Smart Space</span>
           </div>
         </div>
-        
-        <div className="flex items-center gap-2 md:gap-3">
+        <div className="flex items-center gap-2">
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-xl bg-card border border-border text-text-muted hover:text-accent hover:border-accent/30 transition-all flex items-center justify-center"
-            title={theme === "dark" ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            className="p-2 rounded-xl bg-card border border-border text-text-muted hover:text-accent transition-colors"
+            title="Toggle Theme"
           >
             {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
           </button>
-          <div className="hidden xs:block">
-            <StatusBadge active={true} label="ORIN Active" />
-          </div>
           <button
             onClick={onLogout}
-            className="p-1.5 md:p-2 text-text-muted hover:text-text-primary transition-colors"
+            className="p-2 rounded-xl bg-card border border-border text-text-muted hover:text-red-400 transition-colors"
             title="Sign Out"
           >
             <LogOut size={18} />
@@ -1444,7 +1477,7 @@ const Dashboard = ({
         "flex-1 max-w-2xl mx-auto w-full no-scrollbar relative",
         activeTab === "assistant" 
           ? "h-[calc(100dvh-120px)] md:h-[calc(100vh-160px)] overflow-hidden flex flex-col px-4 md:px-6" 
-          : "overflow-y-auto p-4 md:p-6 pb-32 md:pb-48"
+          : "overflow-y-auto p-4 md:p-6 pb-48"
       )}>
         <AnimatePresence mode="wait">
           <motion.div
@@ -1455,6 +1488,13 @@ const Dashboard = ({
             className={cn(activeTab === "assistant" && "flex-1 flex flex-col")}
           >
             {renderContent()}
+            
+            {/* Embedded Logo for Compliance (Inside Scroll Stream) */}
+            {activeTab !== "assistant" && (
+              <div className="mt-12 mb-8 flex justify-center">
+                <CartesiaLogo />
+              </div>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>
@@ -1511,10 +1551,13 @@ export default function App() {
   useEffect(() => {
     if (process.env.NODE_ENV === "development") {
       const originalError = console.error;
-      console.error = (...args) => {
+      if (typeof originalError !== 'function') return;
+
+      console.error = (...args: any[]) => {
+        const msg = String(args[0] || '');
         if (
-          args[0]?.includes?.('Each child in a list should have a unique "key" prop') &&
-          (args[0]?.includes?.('xe') || args[2]?.includes?.('xe'))
+          msg.includes('Each child in a list should have a unique "key" prop') &&
+          (msg.includes('xe') || String(args[2] || '').includes('xe'))
         ) {
           return;
         }
@@ -1712,17 +1755,23 @@ export default function App() {
         <div className="relative z-10 flex flex-col min-h-screen">
           <AnimatePresence mode="wait">
           {view === "landing" && (
-            <motion.div key="landing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div key="landing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex-1 flex flex-col">
               <LandingPage />
+              <div className="pb-8 flex justify-center">
+                <CartesiaLogo />
+              </div>
             </motion.div>
           )}
           {view === "onboarding" && (
-            <motion.div key="onboarding" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }}>
+            <motion.div key="onboarding" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="flex-1 flex flex-col">
               <OnboardingFlow onComplete={handleOnboardingComplete} onBack={() => { disconnect(); setView("landing"); }} />
+              <div className="pb-8 flex justify-center">
+                <CartesiaLogo />
+              </div>
             </motion.div>
           )}
           {view === "dashboard" && (
-            <motion.div key="dashboard" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}>
+            <motion.div key="dashboard" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} className="flex-1 flex flex-col">
               <Dashboard
                 guestName={guestName}
                 walletAddress={walletAddress}
@@ -1738,10 +1787,6 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
-        {/* Footer — Cartesia Startups Grant Compliance */}
-        <footer className="mt-auto py-4 px-6 flex justify-center items-center">
-          <CartesiaLogo />
-        </footer>
       </div>
     </div>
   </ThemeContext.Provider>
