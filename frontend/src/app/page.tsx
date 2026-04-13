@@ -1444,9 +1444,9 @@ const Dashboard = ({
   ];
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden bg-background text-text-primary">
-      {/* Top Bar — Refactored for Mobile */}
-      <div className="flex items-center justify-between px-4 py-3 md:px-6 md:py-4 border-b border-border/50 flex-shrink-0 bg-background/80 backdrop-blur-md z-[60]">
+    <div className="flex-1 flex flex-col bg-background text-text-primary relative overflow-hidden">
+      {/* Top Bar — Fixed for absolute stability */}
+      <div className="fixed top-0 left-0 right-0 flex items-center justify-between px-4 py-3 md:px-6 md:py-4 border-b border-border/50 bg-background/80 backdrop-blur-md z-[70]">
         <div className="flex items-center gap-2 md:gap-3">
           <Logo className="w-7 h-7 md:w-8 md:h-8" />
           <div className="flex flex-col">
@@ -1472,12 +1472,12 @@ const Dashboard = ({
         </div>
       </div>
 
-      {/* Main Content Area — Viewport Hardened */}
+      {/* Main Content Area — Viewport Hardened with top padding for fixed header */}
       <div className={cn(
         "flex-1 max-w-2xl mx-auto w-full no-scrollbar relative",
         activeTab === "assistant" 
-          ? "h-[calc(100dvh-120px)] md:h-[calc(100vh-160px)] overflow-hidden flex flex-col px-4 md:px-6" 
-          : "overflow-y-auto p-4 md:p-6 pb-48"
+          ? "h-[calc(100dvh-120px)] md:h-[calc(100vh-160px)] overflow-hidden flex flex-col px-4 md:px-6 mt-[56px] md:mt-[73px]" 
+          : "overflow-y-auto p-4 md:p-6 pt-[72px] md:pt-[96px] pb-24 md:pb-32"
       )}>
         <AnimatePresence mode="wait">
           <motion.div
@@ -1485,18 +1485,25 @@ const Dashboard = ({
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className={cn(activeTab === "assistant" && "flex-1 flex flex-col")}
+            className={cn(activeTab === "assistant" && "flex-1 flex flex-col", "min-h-full")}
           >
             {renderContent()}
             
-            {/* Embedded Logo for Compliance (Inside Scroll Stream) */}
+            {/* Mobile/Tablet Inline Logo (Bottom of scroll) */}
             {activeTab !== "assistant" && (
-              <div className="mt-12 mb-8 flex justify-center">
+              <div className="mt-12 mb-4 flex justify-center lg:hidden">
                 <CartesiaLogo />
               </div>
             )}
           </motion.div>
         </AnimatePresence>
+      </div>
+
+      {/* Desktop Fixed Corner Logo (Compliance without layout disruption) */}
+      <div className="fixed bottom-6 right-8 z-[100] hidden lg:block pointer-events-none">
+        <div className="pointer-events-auto opacity-60 hover:opacity-100 transition-opacity duration-500 bg-background/60 backdrop-blur-2xl p-3 rounded-2xl border border-border/60 shadow-lg shadow-accent/5">
+           <CartesiaLogo />
+        </div>
       </div>
 
       {/* Bottom Nav — Refined for Premium Mobile Feel */}
