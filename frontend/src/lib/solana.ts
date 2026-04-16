@@ -12,6 +12,7 @@
 import { Program, AnchorProvider, Idl } from "@coral-xyz/anchor";
 import {
   Connection,
+  ConnectionConfig,
   PublicKey,
   SystemProgram,
   clusterApiUrl,
@@ -26,12 +27,21 @@ type ProviderWalletLike = {
 /** Solana Devnet RPC endpoint */
 const RPC_ENDPOINT =
   process.env.NEXT_PUBLIC_RPC_ENDPOINT || clusterApiUrl("devnet");
+const RPC_WS_ENDPOINT = process.env.NEXT_PUBLIC_RPC_WS_ENDPOINT;
+let sharedConnection: Connection | null = null;
 
 /**
  * Creates a Solana Connection instance for Devnet.
  */
 export function getConnection(): Connection {
-  return new Connection(RPC_ENDPOINT, "confirmed");
+  if (!sharedConnection) {
+    const config: ConnectionConfig = {
+      commitment: "confirmed",
+      ...(RPC_WS_ENDPOINT ? { wsEndpoint: RPC_WS_ENDPOINT } : {}),
+    };
+    sharedConnection = new Connection(RPC_ENDPOINT, config);
+  }
+  return sharedConnection;
 }
 
 /**

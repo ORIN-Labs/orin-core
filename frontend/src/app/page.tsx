@@ -151,24 +151,62 @@ const getErrorMessage = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
 const renderTextWithLinks = (text: string): React.ReactNode[] => {
-  const urlRegex = /(https?:\/\/[^\s]+)/g;
-  const parts = text.split(urlRegex);
-  return parts.map((part, index) => {
-    if (part.startsWith("http://") || part.startsWith("https://")) {
-      return (
-        <a
-          key={`link-${index}`}
-          href={part}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline text-accent break-all"
-        >
-          {part}
-        </a>
-      );
+  const renderPlainUrls = (input: string, keyPrefix: string): React.ReactNode[] => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = input.split(urlRegex);
+    return parts.map((part, index) => {
+      if (part.startsWith("http://") || part.startsWith("https://")) {
+        return (
+          <a
+            key={`${keyPrefix}-url-${index}`}
+            href={part}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline text-accent break-all"
+          >
+            {part}
+          </a>
+        );
+      }
+      return <React.Fragment key={`${keyPrefix}-text-${index}`}>{part}</React.Fragment>;
+    });
+  };
+
+  const markdownLinkRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null = null;
+  let block = 0;
+
+  while ((match = markdownLinkRegex.exec(text)) !== null) {
+    const [fullMatch, label, url] = match;
+    const start = match.index;
+    const end = start + fullMatch.length;
+
+    if (start > lastIndex) {
+      nodes.push(...renderPlainUrls(text.slice(lastIndex, start), `plain-${block++}`));
     }
-    return <React.Fragment key={`text-${index}`}>{part}</React.Fragment>;
-  });
+
+    nodes.push(
+      <a
+        key={`md-${block++}`}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="underline text-accent break-all"
+      >
+        {label}
+      </a>
+    );
+
+    lastIndex = end;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(...renderPlainUrls(text.slice(lastIndex), `tail-${block++}`));
+  }
+
+  return nodes;
 };
 
 const getNumericValue = (
@@ -899,11 +937,10 @@ const Dashboard = ({
         manualPrefs,
         guestName
       );
-      const sigText = res.solanaTxSignature ? ` TX Signature: ${res.solanaTxSignature.slice(0,12)}...` : "";
-      const explorerLink = res.solanaTxSignature
-        ? ` https://explorer.solana.com/tx/${res.solanaTxSignature}?cluster=devnet`
+      const signatureLink = res.solanaTxSignature
+        ? ` TX Signature: [${res.solanaTxSignature.slice(0, 12)}...](https://explorer.solana.com/tx/${res.solanaTxSignature}?cluster=devnet)`
         : "";
-      notifyOrin(`Environment preferences synchronized. Transaction was subsidized by ORIN Relay (Gasless).${sigText}${explorerLink}`);
+      notifyOrin(`Environment preferences synchronized. Transaction was subsidized by ORIN Relay (Gasless).${signatureLink}`);
     } catch (e: unknown) {
       notifyOrin(`Error saving setup: ${getErrorMessage(e)}`);
     } finally {
