@@ -15,7 +15,7 @@
 
 import React from "react";
 import { PrivyProvider } from "@privy-io/react-auth";
-import { toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
+import { defaultSolanaRpcsPlugin, toSolanaWalletConnectors } from "@privy-io/react-auth/solana";
 
 const solanaConnectors = toSolanaWalletConnectors({
   shouldAutoConnect: true,
@@ -56,6 +56,7 @@ export default function PrivyClientProvider({ children }: Props) {
             connectors: solanaConnectors,
           },
         },
+        plugins: [defaultSolanaRpcsPlugin()],
       }}
     >
       {children}

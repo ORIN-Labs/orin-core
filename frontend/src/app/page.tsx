@@ -630,7 +630,6 @@ const Dashboard = ({
           const signed = await signPrivyTransaction({
             transaction: tx.serialize({ requireAllSignatures: false, verifySignatures: false }),
             wallet: privySignerWallet,
-            chain: "solana:devnet",
           });
           return Transaction.from(signed.signedTransaction);
         },
@@ -1921,4 +1920,3 @@ export default function App() {
   </ThemeContext.Provider>
   );
 }
-
