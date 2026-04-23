@@ -42,6 +42,10 @@ import {
   Activity,
   MessageSquare,
   Camera,
+  CalendarDays,
+  BedDouble,
+  MapPin,
+  Ticket,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { Idl } from "@coral-xyz/anchor";
@@ -64,6 +68,8 @@ import {
 import { saveManualPreferences, saveVoicePreferences, getRelayOpts, RoomPreferences } from "../lib/savePreferences";
 import { getProgram, getProvider, initializeGuestOnChain, fetchGuestProfile, getConnection } from "../lib/solana";
 import { deriveGuestPda } from "../lib/pda";
+import type { BookingSummary, CuratedStayOption, CuratedStayResponse } from "../lib/curatedBookingContract";
+import { MOCK_CURATED_STAY_RESPONSE, buildMockBookingSummary } from "../lib/curatedBookingMock";
 import idl from "../../idl/orin_identity.json";
 
 // --- Theme Context ---
@@ -110,6 +116,7 @@ type ChatMessage = {
   role: ChatRole;
   text: string;
 };
+type BookingFlowStage = "idle" | "options" | "confirmation" | "payment";
 type CanonicalRoomState = {
   temp?: number;
   lighting?: "warm" | "cold" | "ambient";
@@ -318,7 +325,7 @@ const LandingPage = () => {
           <h1 className="text-6xl md:text-8xl font-light tracking-tighter font-serif leading-none">ORIN</h1>
           <p className="text-accent font-mono text-[9px] md:text-xs uppercase tracking-[0.4em] md:tracking-[0.6em] font-bold">Your Personal AI Concierge</p>
           <p className="text-text-secondary text-base md:text-xl font-light font-serif opacity-60 italic mt-4">
-            Every space knows you.
+            Every hotel already knows you.
           </p>
         </div>
       </motion.div>
@@ -334,6 +341,9 @@ const LandingPage = () => {
             <Wallet size={16} />
             {!ready ? "Loading..." : "Sign In to ORIN"}
           </button>
+          <p className="text-text-muted text-[10px] uppercase tracking-[0.2em]">
+            Email sign-in: check your email for a 4 digit code
+          </p>
         </div>
       </motion.div>
 
@@ -524,7 +534,7 @@ const Dashboard = ({
   theme: "dark" | "light";
   toggleTheme: () => void;
 }) => {
-  const [activeTab, setActiveTab] = useState<DashboardTab>("home");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("assistant");
   const [temp, setTemp] = useState(22);
   const [brightness, setBrightness] = useState(60);
   const [lightingMode, setLightingMode] = useState<"warm" | "cold" | "ambient">("warm");
@@ -534,6 +544,11 @@ const Dashboard = ({
   const [nestMode, setNestMode] = useState("HEAT");
   const [, setHueColor] = useState("#C4A97A");
   const [isProcessingVoice, setIsProcessingVoice] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [bookingFlowStage, setBookingFlowStage] = useState<BookingFlowStage>("idle");
+  const [curatedResponse, setCuratedResponse] = useState<CuratedStayResponse | null>(null);
+  const [selectedStay, setSelectedStay] = useState<CuratedStayOption | null>(null);
+  const [bookingSummary, setBookingSummary] = useState<BookingSummary | null>(null);
 
   // Anti-Flicker Guard: Prevents stale ground-truth from overwriting recent user changes
   const lastInteractionRef = useRef<number>(0);
@@ -547,6 +562,10 @@ const Dashboard = ({
     setChatMessages([
       createChatMessage("orin", `Welcome, ${guestName}. I'm ORIN, your personal AI concierge. How can I help you today?`, "welcome"),
     ]);
+    setBookingFlowStage("idle");
+    setCuratedResponse(null);
+    setSelectedStay(null);
+    setBookingSummary(null);
   }, [guestName]);
 
   // Load profile image from local storage on mount
@@ -574,6 +593,58 @@ const Dashboard = ({
     appendChatMessage("orin", text);
   }, [appendChatMessage]);
 
+  const formatCurrency = useCallback((amount: number, currency: string) => {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency,
+        maximumFractionDigits: 0,
+      }).format(amount);
+    } catch {
+      return `${currency} ${amount}`;
+    }
+  }, []);
+
+  const isCuratedBookingIntent = useCallback((input: string) => {
+    const normalized = input.toLowerCase();
+    return ["book", "booking", "hotel", "stay", "trip", "travel"].some((keyword) =>
+      normalized.includes(keyword)
+    );
+  }, []);
+
+  const handleCuratedBookingIntent = useCallback((userInput: string) => {
+    setActiveTab("assistant");
+    appendChatMessage("user", userInput);
+    const response = MOCK_CURATED_STAY_RESPONSE;
+    setCuratedResponse(response);
+    setSelectedStay(null);
+    setBookingSummary(null);
+    setBookingFlowStage("options");
+    appendChatMessage(
+      "orin",
+      `${response.conversationSummary}\n\nI selected ${response.options.length} curated stays for you. Choose one and I'll prepare the booking summary.`
+    );
+  }, [appendChatMessage]);
+
+  const handleSelectCuratedStay = useCallback((option: CuratedStayOption) => {
+    setSelectedStay(option);
+    setBookingSummary(buildMockBookingSummary(option));
+    setBookingFlowStage("confirmation");
+    appendChatMessage(
+      "orin",
+      `Great choice. I prepared a booking summary for ${option.hotelName}. Confirm when you are ready.`
+    );
+  }, [appendChatMessage]);
+
+  const handleConfirmCuratedStay = useCallback(() => {
+    if (!selectedStay) return;
+    setBookingFlowStage("payment");
+    appendChatMessage(
+      "orin",
+      `Booking payment summary is ready for ${selectedStay.hotelName}. ORIN points have been applied as a discount line.`
+    );
+  }, [appendChatMessage, selectedStay]);
+
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -595,7 +666,6 @@ const Dashboard = ({
       reader.readAsDataURL(file);
     }
   };
-  const [chatInput, setChatInput] = useState("");
   const [activeRequests, setActiveRequests] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isCheckoutPending, setIsCheckoutPending] = useState(false);
@@ -903,8 +973,14 @@ const Dashboard = ({
   ]);
 
   const handleTextSend = () => {
-    if (!chatInput.trim()) return;
-    handleVoiceCommand(chatInput.trim());
+    const trimmedInput = chatInput.trim();
+    if (!trimmedInput) return;
+    if (isCuratedBookingIntent(trimmedInput)) {
+      handleCuratedBookingIntent(trimmedInput);
+      setChatInput("");
+      return;
+    }
+    handleVoiceCommand(trimmedInput);
     setChatInput("");
   };
 
@@ -1013,7 +1089,11 @@ const Dashboard = ({
           try {
             const text = await transcribeAudio(blob);
             replaceChatMessage(recordingMessageId, text);
-            handleVoiceCommand(text);
+            if (isCuratedBookingIntent(text)) {
+              handleCuratedBookingIntent(text);
+            } else {
+              handleVoiceCommand(text);
+            }
           } catch (e: unknown) {
             replaceChatMessage(recordingMessageId, "🎙️ (Transcription failed)");
             appendChatMessage("orin", `Transcription failed: ${getErrorMessage(e)}`);
@@ -1043,7 +1123,15 @@ const Dashboard = ({
             mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
         }
     };
-  }, [appendChatMessage, handleVoiceCommand, isRecording, notifyOrin, replaceChatMessage]);
+  }, [
+    appendChatMessage,
+    handleCuratedBookingIntent,
+    handleVoiceCommand,
+    isCuratedBookingIntent,
+    isRecording,
+    notifyOrin,
+    replaceChatMessage,
+  ]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1166,8 +1254,8 @@ const Dashboard = ({
               <MessageSquare className="w-5 h-5 md:w-[22px] md:h-[22px]" />
             </div>
             <div>
-              <h4 className="font-bold text-sm">Talk to ORIN</h4>
-              <p className="text-text-muted text-[10px] md:text-xs">Voice or text</p>
+              <h4 className="font-bold text-sm">Curated Stays</h4>
+              <p className="text-text-muted text-[10px] md:text-xs">Chat-first booking flow</p>
             </div>
           </Card>
           <Card onClick={() => setActiveTab("control")} className="flex items-center gap-4 p-4 md:p-5 group hover:border-accent/30 transition-all cursor-pointer">
@@ -1256,6 +1344,105 @@ const Dashboard = ({
           </motion.div>
         )}
         <div ref={messagesEndRef} />
+
+        {bookingFlowStage === "options" && curatedResponse && (
+          <div className="space-y-3 pt-2">
+            <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
+              Curated stays (2-3 only)
+            </p>
+            {curatedResponse.options.map((option) => (
+              <Card key={option.hotelId} className="p-4 space-y-3 border-accent/20">
+                <div className="flex items-start gap-3">
+                  <img
+                    src={option.image}
+                    alt={option.hotelName}
+                    className="w-20 h-20 rounded-xl object-cover border border-border"
+                  />
+                  <div className="space-y-1 min-w-0">
+                    <h3 className="font-bold text-sm">{option.hotelName}</h3>
+                    <p className="text-text-muted text-xs flex items-center gap-1">
+                      <MapPin size={12} /> {option.location}
+                    </p>
+                    <p className="text-accent font-bold text-sm">
+                      {formatCurrency(option.price, option.currency)} / night
+                    </p>
+                  </div>
+                </div>
+                <p className="text-xs text-text-secondary">
+                  Why ORIN picked this: {option.reasonForRecommendation}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {option.tags.map((tag) => (
+                    <span
+                      key={`${option.hotelId}-${tag}`}
+                      className="text-[10px] px-2 py-1 rounded-full border border-border text-text-muted"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+                <button
+                  onClick={() => handleSelectCuratedStay(option)}
+                  className="w-full py-2 rounded-xl bg-accent text-[#332F2E] text-sm font-bold"
+                >
+                  Select stay
+                </button>
+              </Card>
+            ))}
+          </div>
+        )}
+
+        {bookingFlowStage === "confirmation" && bookingSummary && selectedStay && (
+          <Card className="p-4 space-y-3 border-accent/20">
+            <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
+              Booking confirmation
+            </p>
+            <h3 className="font-bold">{selectedStay.hotelName}</h3>
+            <p className="text-xs text-text-secondary flex items-center gap-2">
+              <CalendarDays size={12} />
+              {bookingSummary.checkInDate} to {bookingSummary.checkOutDate}
+            </p>
+            <p className="text-xs text-text-secondary flex items-center gap-2">
+              <BedDouble size={12} />
+              {bookingSummary.guests} guests
+            </p>
+            <p className="text-xs text-text-secondary">{selectedStay.cancellationPolicy}</p>
+            <button
+              onClick={handleConfirmCuratedStay}
+              className="w-full py-2 rounded-xl bg-accent text-[#332F2E] text-sm font-bold"
+            >
+              Confirm booking details
+            </button>
+          </Card>
+        )}
+
+        {bookingFlowStage === "payment" && bookingSummary && (
+          <Card className="p-4 space-y-3 border-accent/20">
+            <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
+              Payment summary
+            </p>
+            {bookingSummary.priceLines.map((line) => (
+              <div key={line.label} className="flex items-center justify-between text-sm">
+                <span className="text-text-secondary">{line.label}</span>
+                <span className={line.lineType === "discount" ? "text-accent font-bold" : "font-medium"}>
+                  {line.lineType === "discount" ? "-" : ""}
+                  {formatCurrency(Math.abs(line.amount), bookingSummary.currency)}
+                </span>
+              </div>
+            ))}
+            <div className="pt-2 border-t border-border flex items-center justify-between">
+              <span className="font-bold">Payable total</span>
+              <span className="font-bold text-accent">
+                {formatCurrency(bookingSummary.payableTotal, bookingSummary.currency)}
+              </span>
+            </div>
+            <p className="text-xs text-text-secondary flex items-center gap-2">
+              <Ticket size={12} />
+              Redeeming {bookingSummary.pointsRedemption.pointsUsed} ORIN points for{" "}
+              {formatCurrency(bookingSummary.pointsRedemption.discountAmount, bookingSummary.currency)} off
+            </p>
+          </Card>
+        )}
         
         {/* Compliance Logo in Chat Stream */}
         <div className="flex justify-center py-4 opacity-50">
@@ -1293,6 +1480,20 @@ const Dashboard = ({
             className="p-2.5 bg-accent text-[#332F2E] rounded-xl hover:scale-105 active:scale-95 transition-all disabled:opacity-30 flex-shrink-0"
           >
             <Send size={18} />
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2 pt-2 px-1">
+          <button
+            onClick={() => handleCuratedBookingIntent("ORIN, recommend curated stays for my trip.")}
+            className="text-[10px] px-3 py-1.5 rounded-full border border-border text-text-muted hover:text-accent hover:border-accent/40 transition-colors"
+          >
+            Recommend stays
+          </button>
+          <button
+            onClick={() => handleCuratedBookingIntent("Show me premium hotel options for two nights.")}
+            className="text-[10px] px-3 py-1.5 rounded-full border border-border text-text-muted hover:text-accent hover:border-accent/40 transition-colors"
+          >
+            Premium options
           </button>
         </div>
       </motion.div>
