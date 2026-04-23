@@ -16,6 +16,15 @@ import { getFeePayerKeypair, relayTransaction } from "../shared/feePayer";
 import { RPC_ENDPOINT } from "../shared/constants";
 import { FAST_INTENTS } from "../config/fast_intents";
 import { getGuestProfile, updateGuestAvatar } from "../state/FirestoreService";
+import {
+  searchStays,
+  createQuote,
+  createBooking,
+  getBooking,
+  cancelBooking,
+  DuffelError,
+} from "../duffel/duffel.service";
+import type { DuffelSearchRequest, DuffelBookingRequest } from "../duffel/duffel.types";
 
 /**
  * ORIN Production API Gateway
@@ -1234,6 +1243,321 @@ app.post<{ Body: { transaction: string } }>("/api/v1/relay", async (request, rep
     });
   }
 });
+
+// ============================================================================
+// DUFFEL STAYS API — Hotel Search → Quote → Booking Pipeline
+// ============================================================================
+// All routes are protected by the same X-API-KEY auth used elsewhere.
+// We NEVER forward raw Duffel blobs to the frontend — only slim Card shapes.
+// All routes under /api/v1/stays/* follow the 3-step booking lifecycle.
+// ============================================================================
+
+/**
+ * STEP 1 — HOTEL SEARCH
+ * -------------------------------------------------------------
+ * Accepts a structured search request and returns the top 3
+ * curated hotel cards filtered by review quality & price-value score.
+ *
+ * Supports two search modes (Duffel requirement — one or the other):
+ *   - location  : { latitude, longitude, radius }
+ *   - accommodation: { id }
+ *
+ * Body: DuffelSearchRequest (see duffel.types.ts)
+ *
+ * Example:
+ *   POST /api/v1/stays/search
+ *   {
+ *     "check_in_date": "2024-06-04",
+ *     "check_out_date": "2024-06-07",
+ *     "rooms": 1,
+ *     "guests": [{ "type": "adult" }],
+ *     "location": { "latitude": 51.5071, "longitude": -0.1416, "radius": 5 }
+ *   }
+ */
+interface StaysSearchBody {
+  check_in_date: string;
+  check_out_date: string;
+  rooms: number;
+  guests: { type: "adult" | "child"; age?: number }[];
+  location?: { latitude: number; longitude: number; radius?: number };
+  accommodation?: { id: string };
+  free_cancellation_only?: boolean;
+  instant_payment?: boolean;
+}
+
+app.post<{ Body: StaysSearchBody }>("/api/v1/stays/search", async (request, reply) => {
+  const reqLogger = request.reqLogger;
+
+  const apiKey = request.headers["x-api-key"];
+  if (apiKey !== env.API_KEY) {
+    reqLogger.warn({ origin: request.headers.origin }, "unauthorized_stays_search");
+    return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+  }
+
+  if (!env.DUFFEL_API_KEY) {
+    return reply.status(503).send({ error: "Duffel integration is not configured. Add DUFFEL_API_KEY to .env." });
+  }
+
+  const {
+    check_in_date,
+    check_out_date,
+    rooms,
+    guests,
+    location,
+    accommodation,
+    free_cancellation_only,
+    instant_payment,
+  } = request.body ?? ({} as StaysSearchBody);
+
+  if (!check_in_date || !check_out_date || !rooms || !guests?.length) {
+    return reply.status(400).send({
+      error: "Required: check_in_date, check_out_date, rooms, guests. Plus one of: location or accommodation.",
+    });
+  }
+  if (!location && !accommodation) {
+    return reply.status(400).send({
+      error: "Provide either 'location' (lat/lon/radius) or 'accommodation' (id).",
+    });
+  }
+
+  // Build the typed Duffel request
+  const duffelParams: DuffelSearchRequest = {
+    check_in_date,
+    check_out_date,
+    rooms,
+    guests,
+    free_cancellation_only,
+    instant_payment,
+    ...(location
+      ? {
+          location: {
+            radius: location.radius ?? 5,
+            geographic_coordinates: {
+              latitude: location.latitude,
+              longitude: location.longitude,
+            },
+          },
+        }
+      : { accommodation }),
+  };
+
+  try {
+    const result = await searchStays(duffelParams);
+    reqLogger.info(
+      { total_found: result.total_found, returned: result.hotels.length },
+      "stays_search_success"
+    );
+    return reply.send({
+      status: "ok",
+      hotels: result.hotels,
+      total_found: result.total_found,
+      search_created_at: result.search_created_at,
+    });
+  } catch (err) {
+    if (err instanceof DuffelError) {
+      reqLogger.error({ code: err.duffelCode, status: err.status }, "duffel_search_error");
+      return reply.status(err.status >= 400 && err.status < 500 ? 400 : 502).send({
+        error: "Hotel search failed",
+        code: err.duffelCode,
+        details: err.message,
+      });
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    reqLogger.error({ err: msg }, "stays_search_unexpected_error");
+    return reply.status(500).send({ error: "Internal error during hotel search", details: msg });
+  }
+});
+
+/**
+ * STEP 2 — CREATE QUOTE
+ * -------------------------------------------------------------
+ * Locks in the current price for a specific rate_id.
+ * Returns a quote_id required for the final booking step.
+ * Rate IDs come from a previous /stays/search response.
+ *
+ * Body: { rate_id: string }
+ *
+ * Example:
+ *   POST /api/v1/stays/quote
+ *   { "rate_id": "rat_0000ARxBI85qTkbVapZDD2" }
+ */
+app.post<{ Body: { rate_id: string } }>("/api/v1/stays/quote", async (request, reply) => {
+  const reqLogger = request.reqLogger;
+
+  const apiKey = request.headers["x-api-key"];
+  if (apiKey !== env.API_KEY) {
+    reqLogger.warn({ origin: request.headers.origin }, "unauthorized_stays_quote");
+    return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+  }
+
+  if (!env.DUFFEL_API_KEY) {
+    return reply.status(503).send({ error: "Duffel integration is not configured." });
+  }
+
+  const { rate_id } = request.body ?? {};
+  if (!rate_id) {
+    return reply.status(400).send({ error: "Required: rate_id" });
+  }
+
+  try {
+    const quote = await createQuote(rate_id);
+    reqLogger.info({ quote_id: quote.quote_id, total: quote.total_amount }, "stays_quote_success");
+    return reply.send({ status: "ok", quote });
+  } catch (err) {
+    if (err instanceof DuffelError) {
+      reqLogger.error({ code: err.duffelCode, status: err.status }, "duffel_quote_error");
+      return reply.status(err.status >= 400 && err.status < 500 ? 400 : 502).send({
+        error: "Quote creation failed",
+        code: err.duffelCode,
+        details: err.message,
+      });
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return reply.status(500).send({ error: "Internal error during quote creation", details: msg });
+  }
+});
+
+/**
+ * STEP 3 — CREATE BOOKING
+ * -------------------------------------------------------------
+ * Submits the final reservation using a confirmed quote_id.
+ * Returns a booking confirmation with hotel reference code.
+ *
+ * For Sandbox (Test Token): omit `payment` field — Duffel deducts from balance.
+ * For Production: pass `payment.three_d_secure_session_id`.
+ *
+ * Body: DuffelBookingRequest
+ *
+ * Example (Sandbox):
+ *   POST /api/v1/stays/book
+ *   {
+ *     "quote_id": "quo_0000AS0NZdKjjnnHZmSUbI",
+ *     "email": "guest@orin.ai",
+ *     "phone_number": "+1234567890",
+ *     "guests": [{ "given_name": "James", "family_name": "Chen" }]
+ *   }
+ */
+app.post<{ Body: DuffelBookingRequest }>("/api/v1/stays/book", async (request, reply) => {
+  const reqLogger = request.reqLogger;
+
+  const apiKey = request.headers["x-api-key"];
+  if (apiKey !== env.API_KEY) {
+    reqLogger.warn({ origin: request.headers.origin }, "unauthorized_stays_book");
+    return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+  }
+
+  if (!env.DUFFEL_API_KEY) {
+    return reply.status(503).send({ error: "Duffel integration is not configured." });
+  }
+
+  const { quote_id, email, phone_number, guests } = request.body ?? ({} as DuffelBookingRequest);
+  if (!quote_id || !email || !phone_number || !guests?.length) {
+    return reply.status(400).send({
+      error: "Required: quote_id, email, phone_number, guests (min 1 with given_name + family_name)",
+    });
+  }
+
+  try {
+    const confirmation = await createBooking(request.body);
+    reqLogger.info(
+      { booking_id: confirmation.booking_id, reference: confirmation.reference, status: confirmation.status },
+      "stays_booking_success"
+    );
+    return reply.send({ status: "ok", booking: confirmation });
+  } catch (err) {
+    if (err instanceof DuffelError) {
+      reqLogger.error({ code: err.duffelCode, status: err.status }, "duffel_booking_error");
+      return reply.status(err.status >= 400 && err.status < 500 ? 400 : 502).send({
+        error: "Booking creation failed",
+        code: err.duffelCode,
+        details: err.message,
+      });
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return reply.status(500).send({ error: "Internal error during booking", details: msg });
+  }
+});
+
+/**
+ * GET BOOKING STATUS
+ * -------------------------------------------------------------
+ * Retrieves the current state of an existing booking by ID.
+ *
+ * Example:
+ *   GET /api/v1/stays/bookings/bok_0000BTVRuKZTavzrZDJ4cb
+ */
+app.get<{ Params: { booking_id: string } }>(
+  "/api/v1/stays/bookings/:booking_id",
+  async (request, reply) => {
+    const reqLogger = request.reqLogger;
+
+    const apiKey = request.headers["x-api-key"];
+    if (apiKey !== env.API_KEY) {
+      return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+    }
+    if (!env.DUFFEL_API_KEY) {
+      return reply.status(503).send({ error: "Duffel integration is not configured." });
+    }
+
+    const { booking_id } = request.params;
+    try {
+      const booking = await getBooking(booking_id);
+      reqLogger.info({ booking_id, status: booking.status }, "stays_get_booking_success");
+      return reply.send({ status: "ok", booking });
+    } catch (err) {
+      if (err instanceof DuffelError) {
+        return reply.status(err.status === 404 ? 404 : 502).send({
+          error: "Failed to retrieve booking",
+          code: err.duffelCode,
+          details: err.message,
+        });
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: "Internal error", details: msg });
+    }
+  }
+);
+
+/**
+ * CANCEL BOOKING
+ * -------------------------------------------------------------
+ * Cancels a confirmed booking. No refund logic is handled here —
+ * cancellation policy is embedded in the original quote card.
+ *
+ * Example:
+ *   POST /api/v1/stays/bookings/bok_xxx/cancel
+ */
+app.post<{ Params: { booking_id: string } }>(
+  "/api/v1/stays/bookings/:booking_id/cancel",
+  async (request, reply) => {
+    const reqLogger = request.reqLogger;
+
+    const apiKey = request.headers["x-api-key"];
+    if (apiKey !== env.API_KEY) {
+      return reply.status(401).send({ error: "Unauthorized. Valid X-API-KEY required." });
+    }
+    if (!env.DUFFEL_API_KEY) {
+      return reply.status(503).send({ error: "Duffel integration is not configured." });
+    }
+
+    const { booking_id } = request.params;
+    try {
+      const result = await cancelBooking(booking_id);
+      reqLogger.info({ booking_id, status: result.status }, "stays_cancel_booking_success");
+      return reply.send({ status: "ok", booking_id: result.booking_id, booking_status: result.status });
+    } catch (err) {
+      if (err instanceof DuffelError) {
+        return reply.status(err.status === 404 ? 404 : 502).send({
+          error: "Cancellation failed",
+          code: err.duffelCode,
+          details: err.message,
+        });
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return reply.status(500).send({ error: "Internal error during cancellation", details: msg });
+    }
+  }
+);
 
 app.get("/api/v1/warmup", async () => ({ status: "warm", cacheSize: voiceCache.size }));
 app.get("/health", async () => ({ status: "ok" }));

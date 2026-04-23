@@ -14,6 +14,17 @@ const IDL_PATH = path.resolve(__dirname, PATHS.IDL_PATH);
 const NETWORK = process.env.NETWORK || 'Localnet';
 const RPC_ENDPOINT = NETWORK === 'Localnet' ? 'http://127.0.0.1:8899' : 'https://api.devnet.solana.com';
 
+// ---------------------------------------------------------------------------
+// Backend base URL + API Key
+// ---------------------------------------------------------------------------
+const BACKEND_URL = process.env.BACKEND_URL || "http://127.0.0.1:3001";
+const API_KEY = process.env.API_KEY || "orin_secret_key_2026_dev";
+
+const HEADERS = {
+  "Content-Type": "application/json",
+  "x-api-key": API_KEY,
+};
+
 async function runSimulation() {
     console.log("🎮 ORIN Web2.5 Hybrid Simulator Started...\n");
 
@@ -111,4 +122,226 @@ async function runSimulation() {
     console.log("You should see it cross-verify the HTTP cache with the Blockchain State!\n");
 }
 
-runSimulation().catch(console.error);
+// ---------------------------------------------------------------------------
+// Duffel Stays Integration — End-to-End Pipeline Test
+// ---------------------------------------------------------------------------
+// Simulates the complete hotel booking flow as seen from the frontend:
+//   Step 1: Search for hotels near London (Duffel Test sandbox)
+//   Step 2: Lock in price with a Quote for the cheapest rate
+//   Step 3: Create a Booking using sandbox credentials
+//
+// Run with:  BACKEND_URL=http://127.0.0.1:3001 ts-node src/simulate_frontend.ts --duffel
+// ---------------------------------------------------------------------------
+
+async function runDuffelSimulation(): Promise<void> {
+  console.log("✈️  ORIN Duffel Stays Simulator — Full Pipeline Test\n");
+  console.log(`📡 Backend: ${BACKEND_URL}`);
+  console.log(`🔑 API Key: ${API_KEY.slice(0, 8)}...`);
+
+  // ─── STEP 1: SEARCH ────────────────────────────────────────────────────────
+
+  console.log("\n══════════════════════════════════════════════");
+  console.log("STEP 1/3 — 🔍 Searching hotels near London...");
+  console.log("══════════════════════════════════════════════");
+
+  // 2026 dates (must be ≤ 330 days from today as per Duffel constraints)
+  const checkIn  = "2026-06-10";
+  const checkOut = "2026-06-13";
+
+  const searchPayload = {
+    check_in_date: checkIn,
+    check_out_date: checkOut,
+    rooms: 1,
+    guests: [{ type: "adult" }],
+    // London coordinates — matches Duffel test hotel location
+    location: {
+      latitude: 51.5071,
+      longitude: -0.1416,
+      radius: 5,
+    },
+  };
+
+  console.log("📤 Request:", JSON.stringify(searchPayload, null, 2));
+
+  const searchRes = await fetch(`${BACKEND_URL}/api/v1/stays/search`, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify(searchPayload),
+  });
+
+  if (!searchRes.ok) {
+    const body = await searchRes.text();
+    throw new Error(`Search failed [${searchRes.status}]: ${body}`);
+  }
+
+  const searchData = await searchRes.json() as {
+    status: string;
+    hotels: Array<{
+      search_result_id: string;
+      rate_id: string;
+      name: string;
+      rating: number;
+      review_score: number;
+      cheapest_price: string;
+      currency: string;
+      address: string;
+      free_cancellation: boolean;
+    }>;
+    total_found: number;
+  };
+
+  console.log(`\n✅ Search complete! Found ${searchData.total_found} hotels. Showing top ${searchData.hotels.length}:\n`);
+  searchData.hotels.forEach((hotel, i) => {
+    console.log(`  [${i + 1}] ${hotel.name}`);
+    console.log(`      ⭐ ${hotel.rating}★  |  📊 Score: ${hotel.review_score}/10  |  💰 ${hotel.cheapest_price} ${hotel.currency}/night`);
+    console.log(`      📍 ${hotel.address}  |  🆓 Free cancellation: ${hotel.free_cancellation}`);
+    console.log(`      rate_id: ${hotel.rate_id}`);
+  });
+
+  // Pick the first (highest-scored) hotel
+  const selectedHotel = searchData.hotels[0];
+  if (!selectedHotel?.rate_id) {
+    throw new Error("No hotels returned from search. Check DUFFEL_API_KEY and sandbox balance.");
+  }
+
+  // ─── STEP 2: QUOTE ─────────────────────────────────────────────────────────
+
+  console.log("\n══════════════════════════════════════════════");
+  console.log(`STEP 2/3 — 💰 Locking price for: "${selectedHotel.name}"`);
+  console.log("══════════════════════════════════════════════");
+  console.log(`📤 rate_id: ${selectedHotel.rate_id}`);
+
+  const quoteRes = await fetch(`${BACKEND_URL}/api/v1/stays/quote`, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify({ rate_id: selectedHotel.rate_id }),
+  });
+
+  if (!quoteRes.ok) {
+    const body = await quoteRes.text();
+    throw new Error(`Quote failed [${quoteRes.status}]: ${body}`);
+  }
+
+  const quoteData = await quoteRes.json() as {
+    status: string;
+    quote: {
+      quote_id: string;
+      accommodation_name: string;
+      total_amount: string;
+      total_currency: string;
+      tax_amount: string | null;
+      board_type: string;
+      check_in_date: string;
+      check_out_date: string;
+      cancellation_policy: Array<{ refund_amount: string; currency: string; before: string }>;
+    };
+  };
+
+  const quote = quoteData.quote;
+  console.log(`\n✅ Quote confirmed!`);
+  console.log(`   quote_id      : ${quote.quote_id}`);
+  console.log(`   Hotel         : ${quote.accommodation_name}`);
+  console.log(`   Check-in      : ${quote.check_in_date}  ➜  Check-out: ${quote.check_out_date}`);
+  console.log(`   Total         : ${quote.total_amount} ${quote.total_currency}`);
+  console.log(`   Tax           : ${quote.tax_amount ?? "N/A"} ${quote.total_currency}`);
+  console.log(`   Board         : ${quote.board_type}`);
+  if (quote.cancellation_policy?.length) {
+    const cp = quote.cancellation_policy[0];
+    console.log(`   Free cancel before: ${cp.before} (refund: ${cp.refund_amount} ${cp.currency})`);
+  }
+
+  // ─── STEP 3: BOOKING ───────────────────────────────────────────────────────
+
+  console.log("\n══════════════════════════════════════════════");
+  console.log("STEP 3/3 — 🏨 Creating final booking (Sandbox)...");
+  console.log("══════════════════════════════════════════════");
+
+  // Sandbox booking — no `payment` field means Duffel deducts from test balance
+  const bookingPayload = {
+    quote_id: quote.quote_id,
+    email: "orin-test-guest@orin.ai",
+    phone_number: "+12025550147",
+    guests: [
+      {
+        given_name: "ORIN",
+        family_name: "VIP-Guest",
+      },
+    ],
+    accommodation_special_requests: "High floor preferred. Early check-in if available.",
+    metadata: {
+      orin_session_id: `sim_${Date.now()}`,
+      simulated: "true",
+    },
+    // Do NOT include `payment` field in sandbox — Duffel uses balance automatically
+  };
+
+  console.log("📤 Request:", JSON.stringify(bookingPayload, null, 2));
+
+  const bookRes = await fetch(`${BACKEND_URL}/api/v1/stays/book`, {
+    method: "POST",
+    headers: HEADERS,
+    body: JSON.stringify(bookingPayload),
+  });
+
+  if (!bookRes.ok) {
+    const body = await bookRes.text();
+    throw new Error(`Booking failed [${bookRes.status}]: ${body}`);
+  }
+
+  const bookData = await bookRes.json() as {
+    status: string;
+    booking: {
+      booking_id: string;
+      reference: string | null;
+      status: string;
+      hotel_name: string;
+      hotel_address: string;
+      check_in_date: string;
+      check_out_date: string;
+      rooms: number;
+      total_amount: string;
+      currency: string;
+      guest_name: string;
+      email: string;
+      confirmed_at: string | null;
+      check_in_after_time: string;
+      check_out_before_time: string;
+    };
+  };
+
+  const booking = bookData.booking;
+
+  console.log("\n");
+  console.log("╔══════════════════════════════════════════════════════════╗");
+  console.log("║           🎉  BOOKING CONFIRMED — ORIN CONCIERGE         ║");
+  console.log("╠══════════════════════════════════════════════════════════╣");
+  console.log(`║  Booking ID   : ${booking.booking_id.padEnd(42)} ║`);
+  console.log(`║  Reference    : ${(booking.reference ?? "PENDING").padEnd(42)} ║`);
+  console.log(`║  Status       : ${booking.status.toUpperCase().padEnd(42)} ║`);
+  console.log(`║  Hotel        : ${booking.hotel_name.slice(0, 42).padEnd(42)} ║`);
+  console.log(`║  Address      : ${booking.hotel_address.slice(0, 42).padEnd(42)} ║`);
+  console.log(`║  Check-In     : ${booking.check_in_date.padEnd(42)} ║`);
+  console.log(`║  Check-Out    : ${booking.check_out_date.padEnd(42)} ║`);
+  console.log(`║  Guest        : ${booking.guest_name.padEnd(42)} ║`);
+  console.log(`║  Email        : ${booking.email.padEnd(42)} ║`);
+  console.log(`║  Confirmed At : ${(booking.confirmed_at ?? "N/A").padEnd(42)} ║`);
+  console.log("╚══════════════════════════════════════════════════════════╝\n");
+
+  console.log("✅ Duffel 3-step pipeline completed successfully!");
+  console.log("   The frontend can now render the Booking Confirmation Card.");
+  console.log("   Next step: display Apple Wallet / calendar invite buttons.\n");
+}
+
+// ---------------------------------------------------------------------------
+// Entry point — route based on CLI flags
+// ---------------------------------------------------------------------------
+const isDuffelTest = process.argv.includes("--duffel");
+
+if (isDuffelTest) {
+  runDuffelSimulation().catch((err) => {
+    console.error("\n❌ Duffel simulation failed:", err.message ?? err);
+    process.exit(1);
+  });
+} else {
+  runSimulation().catch(console.error);
+}

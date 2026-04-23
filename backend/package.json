@@ -5,12 +5,16 @@
     "license": "MIT",
     "description": "",
     "scripts": {
-        "start": "ts-node src/listener.ts",
+        "build": "tsc",
         "start:listener": "ts-node src/listener.ts",
         "start:api": "ts-node src/api/server.ts",
+        "start:listener:prod": "node dist/listener.js",
+        "start:api:prod": "node dist/api/server.js",
+        "prod:all": "concurrently -k -n api,listener \"npm run start:api:prod\" \"npm run start:listener:prod\"",
         "validate:env": "ts-node src/config/validate_env.ts",
         "dev:all": "npm run validate:env && concurrently -k -n api,listener \"npm run start:api\" \"npm run start:listener\"",
         "simulate": "ts-node src/simulate_frontend.ts",
+        "simulate:duffel": "ts-node src/simulate_frontend.ts --duffel",
         "start_devnet": "set NETWORK=devnet&& ts-node src/listener.ts",
         "simulate_devnet": "set NETWORK=devnet&& ts-node src/simulate_frontend.ts",
         "test": "echo \"Error: no test specified\" && exit 1"
@@ -35,11 +39,11 @@
         "pino": "^10.3.1",
         "uuid": "^13.0.0",
         "ws": "^8.20.0",
-        "zod": "^4.3.6"
+        "zod": "^4.3.6",
+        "concurrently": "^9.2.1"
     },
     "devDependencies": {
         "@types/node": "^25.5.0",
-        "concurrently": "^9.2.1",
         "ts-node": "^10.9.2",
         "typescript": "^5.9.3"
     }

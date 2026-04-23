@@ -56,6 +56,15 @@ const envSchema = z.object({
   API_KEY: z.string().min(1).default("replace_with_a_secure_api_key"),
 
   /**
+   * Duffel Travel API — Test / Production token.
+   * Required for the /api/v1/stays/* endpoints (hotel search, quote, booking).
+   * Generate a Test token at: https://app.duffel.com/access-tokens
+   * Use "duffel_test_..." prefix for sandbox; "duffel_live_..." for production.
+   * Omit (or set to empty) to disable the Duffel module at startup.
+   */
+  DUFFEL_API_KEY: z.string().optional().default(""),
+
+  /**
    * Path to the Firebase Admin SDK service account JSON file.
    * Required for Firestore writes. Falls back to Application Default Credentials
    * (e.g. on Google Cloud / Railway) if not set.
