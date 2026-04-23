@@ -111,10 +111,15 @@ const CartesiaLogo = () => (
 type View = "landing" | "onboarding" | "dashboard";
 type DashboardTab = "home" | "assistant" | "control" | "profile";
 type ChatRole = "user" | "orin";
+type ChatCard =
+  | { type: "curated-options"; options: CuratedStayOption[] }
+  | { type: "booking-confirmation"; selectedStay: CuratedStayOption; bookingSummary: BookingSummary }
+  | { type: "payment-summary"; bookingSummary: BookingSummary; approved?: boolean };
 type ChatMessage = {
   id: string;
   role: ChatRole;
   text: string;
+  card?: ChatCard;
 };
 type BookingFlowStage = "idle" | "options" | "confirmation" | "payment";
 type CanonicalRoomState = {
@@ -148,10 +153,11 @@ type SolanaLinkedAccount = {
   address?: string;
 };
 
-const createChatMessage = (role: ChatRole, text: string, id?: string): ChatMessage => ({
+const createChatMessage = (role: ChatRole, text: string, id?: string, card?: ChatCard): ChatMessage => ({
   id: id ?? `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   role,
   text,
+  card,
 });
 
 const getErrorMessage = (error: unknown): string =>
@@ -580,11 +586,30 @@ const Dashboard = ({
     return nextMessage.id;
   }, []);
 
+  const appendChatCard = useCallback((card: ChatCard, id?: string) => {
+    const nextMessage = createChatMessage("orin", "", id, card);
+    setChatMessages((prev) => [...prev, nextMessage]);
+    return nextMessage.id;
+  }, []);
+
   const replaceChatMessage = useCallback((messageId: string, text: string) => {
     setChatMessages((prev) =>
       prev.map((message) =>
         message.id === messageId ? { ...message, text } : message
       )
+    );
+  }, []);
+
+  const markPaymentCardApproved = useCallback(() => {
+    setChatMessages((prev) =>
+      prev.map((message, index) => {
+        if (message.card?.type !== "payment-summary") return message;
+        const isLatestPaymentCard = prev
+          .slice(index + 1)
+          .every((nextMessage) => nextMessage.card?.type !== "payment-summary");
+        if (!isLatestPaymentCard) return message;
+        return { ...message, card: { ...message.card, approved: true } };
+      })
     );
   }, []);
 
@@ -605,9 +630,21 @@ const Dashboard = ({
     }
   }, []);
 
+  const createMockConfirmationSignature = useCallback(() => {
+    const randomPart = Math.random().toString(36).slice(2, 10).toUpperCase();
+    return `ORIN-${Date.now().toString(36).toUpperCase()}-${randomPart}`;
+  }, []);
+
   const isCuratedBookingIntent = useCallback((input: string) => {
     const normalized = input.toLowerCase();
     return ["book", "booking", "hotel", "stay", "trip", "travel"].some((keyword) =>
+      normalized.includes(keyword)
+    );
+  }, []);
+
+  const isBookingApprovalIntent = useCallback((input: string) => {
+    const normalized = input.toLowerCase();
+    return ["confirm", "approve", "book now", "finalize"].some((keyword) =>
       normalized.includes(keyword)
     );
   }, []);
@@ -624,26 +661,50 @@ const Dashboard = ({
       "orin",
       `${response.conversationSummary}\n\nI selected ${response.options.length} curated stays for you. Choose one and I'll prepare the booking summary.`
     );
-  }, [appendChatMessage]);
+    appendChatCard({ type: "curated-options", options: [...response.options] });
+  }, [appendChatCard, appendChatMessage]);
 
   const handleSelectCuratedStay = useCallback((option: CuratedStayOption) => {
+    const summary = buildMockBookingSummary(option);
     setSelectedStay(option);
-    setBookingSummary(buildMockBookingSummary(option));
+    setBookingSummary(summary);
     setBookingFlowStage("confirmation");
     appendChatMessage(
       "orin",
       `Great choice. I prepared a booking summary for ${option.hotelName}. Confirm when you are ready.`
     );
-  }, [appendChatMessage]);
+    appendChatCard({
+      type: "booking-confirmation",
+      selectedStay: option,
+      bookingSummary: summary,
+    });
+  }, [appendChatCard, appendChatMessage]);
 
   const handleConfirmCuratedStay = useCallback(() => {
-    if (!selectedStay) return;
+    if (!selectedStay || !bookingSummary) return;
     setBookingFlowStage("payment");
     appendChatMessage(
       "orin",
       `Booking payment summary is ready for ${selectedStay.hotelName}. ORIN points have been applied as a discount line.`
     );
-  }, [appendChatMessage, selectedStay]);
+    appendChatCard({
+      type: "payment-summary",
+      bookingSummary,
+    });
+  }, [appendChatCard, appendChatMessage, bookingSummary, selectedStay]);
+
+  const handleFinalizeCuratedBooking = useCallback(() => {
+    if (!selectedStay) return;
+    const confirmationSignature = createMockConfirmationSignature();
+    markPaymentCardApproved();
+    appendChatMessage("user", "confirm");
+    appendChatMessage(
+      "orin",
+      `Booking confirmed for ${selectedStay.hotelName}. ORIN points applied as a discount.`
+    );
+    appendChatMessage("orin", `Confirmation signature: ${confirmationSignature}`);
+    setBookingFlowStage("idle");
+  }, [appendChatMessage, createMockConfirmationSignature, markPaymentCardApproved, selectedStay]);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -669,6 +730,16 @@ const Dashboard = ({
   const [activeRequests, setActiveRequests] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isCheckoutPending, setIsCheckoutPending] = useState(false);
+  const pendingManualSyncRef = useRef<{
+    expiresAt: number;
+    expected: {
+      temp: number;
+      lighting: "warm" | "cold" | "ambient";
+      brightness: number;
+      music: string;
+      musicOn: boolean;
+    };
+  } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const walletAdapter = useWallet();
   const { wallets: privySolanaWallets } = usePrivySolanaWallets();
@@ -746,33 +817,57 @@ const Dashboard = ({
    * Consolidates all Dashboard UI updates from AI (flat) or Backend ground-truth (nested).
    * Ensures visual sliders always match the internal state logic exactly.
    */
-  const syncUIState = useCallback((state: CanonicalRoomState) => {
+  const syncUIState = useCallback((state: CanonicalRoomState, source: "groundTruth" | "ai" = "ai") => {
     if (!state) return;
     
     // Pessimistic Guard: Skip ground-truth if user recently interacted (3s quiet period)
     const isRecentInteraction = Date.now() - lastInteractionRef.current < 3000;
+    const incomingTemp = state.nest?.temp ?? state.temp;
+    const incomingBrightness = state.hue?.brightness ?? state.brightness;
+
+    if (source === "groundTruth" && pendingManualSyncRef.current && Date.now() < pendingManualSyncRef.current.expiresAt) {
+      const expected = pendingManualSyncRef.current.expected;
+      const staleTemp =
+        incomingTemp !== undefined && Math.abs(Number(incomingTemp) - expected.temp) > 0.4;
+      const staleBrightness =
+        incomingBrightness !== undefined &&
+        Math.abs(Number(incomingBrightness) - expected.brightness) > 1;
+      const staleLighting = state.lighting !== undefined && state.lighting !== expected.lighting;
+      const staleMusic =
+        state.music !== undefined &&
+        ((expected.musicOn && state.music !== expected.music) ||
+          (!expected.musicOn && state.music !== ""));
+
+      if (staleTemp || staleBrightness || staleLighting || staleMusic) {
+        return;
+      }
+
+      pendingManualSyncRef.current = null;
+    }
 
     // 1. Handle Nested Device Status structure (RoomDeviceState)
-    if (state.nest?.temp !== undefined && !isRecentInteraction) setTemp(Number(state.nest.temp));
-    if (state.nest?.mode !== undefined && !isRecentInteraction) setNestMode(state.nest.mode);
+    if (state.nest?.temp !== undefined && (source === "ai" || !isRecentInteraction)) setTemp(Number(state.nest.temp));
+    if (state.nest?.mode !== undefined && (source === "ai" || !isRecentInteraction)) setNestMode(state.nest.mode);
     
-    if (state.hue?.brightness !== undefined && !isRecentInteraction) setBrightness(Number(state.hue.brightness));
-    if (state.hue?.color !== undefined && !isRecentInteraction) setHueColor(state.hue.color);
+    if (state.hue?.brightness !== undefined && (source === "ai" || !isRecentInteraction)) setBrightness(Number(state.hue.brightness));
+    if (state.hue?.color !== undefined && (source === "ai" || !isRecentInteraction)) setHueColor(state.hue.color);
     
-    if (state.lighting !== undefined && !isRecentInteraction) setLightingMode(state.lighting);
+    if (state.lighting !== undefined && (source === "ai" || !isRecentInteraction)) setLightingMode(state.lighting);
     
     // 2. Handle Flat AI Response structure (OrinAgentOutput)
     // AI responses are triggered by user interaction, so we allow them through
-    if (state.temp !== undefined) setTemp(Number(state.temp));
-    if (state.brightness !== undefined) setBrightness(Number(state.brightness));
-    if (state.lighting !== undefined) setLightingMode(state.lighting);
-    if (state.musicOn !== undefined) setMusicOn(!!state.musicOn);
+    if (source === "ai") {
+      if (state.temp !== undefined) setTemp(Number(state.temp));
+      if (state.brightness !== undefined) setBrightness(Number(state.brightness));
+      if (state.lighting !== undefined) setLightingMode(state.lighting);
+      if (state.musicOn !== undefined) setMusicOn(!!state.musicOn);
+    }
 
     // Common fields
-    if (state.musicOn !== undefined || state.music !== undefined) {
+    if (source === "ai" && (state.musicOn !== undefined || state.music !== undefined)) {
       setMusicOn(state.musicOn ?? !!state.music);
     }
-    if (state.music && typeof state.music === "string") {
+    if (state.music && typeof state.music === "string" && (source === "ai" || !isRecentInteraction)) {
       setMusicTrack(state.music);
     }
     if (state.services && Array.isArray(state.services)) {
@@ -787,7 +882,7 @@ const Dashboard = ({
     if (!walletAddress || !guestPda) return;
     try {
       const status = await fetchDeviceStatus(guestPda.toBase58());
-      syncUIState(status);
+      syncUIState(status, "groundTruth");
     } catch (e) {
       console.warn(`[ORIN] Failed to fetch ground truth device status: ${getErrorMessage(e)}`);
     }
@@ -926,7 +1021,7 @@ const Dashboard = ({
 
         // Update local React state from AI interpretation to keep UI in sync
         if (res.aiResult) {
-          syncUIState(res.aiResult);
+          syncUIState(res.aiResult, "ai");
           
           // Chat UI Feedback format
           const tempFormat = res.aiResult.temp !== undefined ? `Temp to ${res.aiResult.temp}°C` : "";
@@ -953,6 +1048,9 @@ const Dashboard = ({
     } finally {
       setIsProcessingVoice(false);
       refreshGroundTruth();
+      setTimeout(() => {
+        refreshGroundTruth();
+      }, 3200);
     }
   }, [
     appendChatMessage,
@@ -975,6 +1073,17 @@ const Dashboard = ({
   const handleTextSend = () => {
     const trimmedInput = chatInput.trim();
     if (!trimmedInput) return;
+    if (bookingFlowStage === "confirmation" && isBookingApprovalIntent(trimmedInput)) {
+      appendChatMessage("user", trimmedInput);
+      handleConfirmCuratedStay();
+      setChatInput("");
+      return;
+    }
+    if (bookingFlowStage === "payment" && isBookingApprovalIntent(trimmedInput)) {
+      handleFinalizeCuratedBooking();
+      setChatInput("");
+      return;
+    }
     if (isCuratedBookingIntent(trimmedInput)) {
       handleCuratedBookingIntent(trimmedInput);
       setChatInput("");
@@ -1001,6 +1110,16 @@ const Dashboard = ({
         brightness,
         music: musicOn ? musicTrack : ""
       };
+      pendingManualSyncRef.current = {
+        expiresAt: Date.now() + 25000,
+        expected: {
+          temp: manualPrefs.temp,
+          lighting: manualPrefs.lighting,
+          brightness: manualPrefs.brightness,
+          music: manualPrefs.music,
+          musicOn,
+        },
+      };
 
       const res = await saveManualPreferences(
         program,
@@ -1018,6 +1137,12 @@ const Dashboard = ({
     } finally {
       setIsSaving(false);
       refreshGroundTruth();
+      setTimeout(() => {
+        refreshGroundTruth();
+      }, 3200);
+      setTimeout(() => {
+        refreshGroundTruth();
+      }, 10000);
     }
   };
 
@@ -1089,7 +1214,12 @@ const Dashboard = ({
           try {
             const text = await transcribeAudio(blob);
             replaceChatMessage(recordingMessageId, text);
-            if (isCuratedBookingIntent(text)) {
+            if (bookingFlowStage === "confirmation" && isBookingApprovalIntent(text)) {
+              appendChatMessage("user", text);
+              handleConfirmCuratedStay();
+            } else if (bookingFlowStage === "payment" && isBookingApprovalIntent(text)) {
+              handleFinalizeCuratedBooking();
+            } else if (isCuratedBookingIntent(text)) {
               handleCuratedBookingIntent(text);
             } else {
               handleVoiceCommand(text);
@@ -1125,8 +1255,12 @@ const Dashboard = ({
     };
   }, [
     appendChatMessage,
+    bookingFlowStage,
+    handleConfirmCuratedStay,
+    handleFinalizeCuratedBooking,
     handleCuratedBookingIntent,
     handleVoiceCommand,
+    isBookingApprovalIntent,
     isCuratedBookingIntent,
     isRecording,
     notifyOrin,
@@ -1319,14 +1453,129 @@ const Dashboard = ({
             transition={{ delay: i * 0.05 }}
             className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}
           >
-            <div className={cn(
-              "px-4 py-3 rounded-2xl max-w-[85%] shadow-sm",
-              msg.role === "orin"
-                ? "bg-card border border-border text-text-primary rounded-tl-none font-light leading-relaxed"
-                : "bg-accent text-[#332F2E] font-medium rounded-tr-none shadow-accent/10"
-            )}>
-              <p className="text-sm md:text-base whitespace-pre-wrap">{renderTextWithLinks(msg.text)}</p>
-            </div>
+            {msg.card && msg.card.type === "curated-options" ? (
+              <Card className="p-4 space-y-3 border-accent/20 w-[85%]">
+                <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
+                  Curated stays (2-3 only)
+                </p>
+                {msg.card.options.map((option) => (
+                  <div key={option.hotelId} className="space-y-3 rounded-xl border border-border p-3">
+                    <div className="flex items-start gap-3">
+                      <img
+                        src={option.image}
+                        alt={option.hotelName}
+                        className="w-20 h-20 rounded-xl object-cover border border-border"
+                      />
+                      <div className="space-y-1 min-w-0">
+                        <h3 className="font-bold text-sm">{option.hotelName}</h3>
+                        <p className="text-text-muted text-xs flex items-center gap-1">
+                          <MapPin size={12} /> {option.location}
+                        </p>
+                        <p className="text-accent font-bold text-sm">
+                          {formatCurrency(option.price, option.currency)} / night
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-text-secondary">
+                      Why ORIN picked this: {option.reasonForRecommendation}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {option.tags.map((tag) => (
+                        <span
+                          key={`${option.hotelId}-${tag}`}
+                          className="text-[10px] px-2 py-1 rounded-full border border-border text-text-muted"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => handleSelectCuratedStay(option)}
+                      className="w-full py-2 rounded-xl bg-accent text-[#332F2E] text-sm font-bold"
+                    >
+                      Select stay
+                    </button>
+                  </div>
+                ))}
+              </Card>
+            ) : msg.card && msg.card.type === "booking-confirmation" ? (
+              <Card className="p-4 space-y-3 border-accent/20 w-[85%]">
+                <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
+                  Booking confirmation
+                </p>
+                <h3 className="font-bold">{msg.card.selectedStay.hotelName}</h3>
+                <p className="text-xs text-text-secondary flex items-center gap-2">
+                  <CalendarDays size={12} />
+                  {msg.card.bookingSummary.checkInDate} to {msg.card.bookingSummary.checkOutDate}
+                </p>
+                <p className="text-xs text-text-secondary flex items-center gap-2">
+                  <BedDouble size={12} />
+                  {msg.card.bookingSummary.guests} guests
+                </p>
+                <p className="text-xs text-text-secondary">{msg.card.selectedStay.cancellationPolicy}</p>
+                <button
+                  onClick={handleConfirmCuratedStay}
+                  className="w-full py-2 rounded-xl bg-accent text-[#332F2E] text-sm font-bold"
+                >
+                  Confirm booking details
+                </button>
+              </Card>
+            ) : msg.card && msg.card.type === "payment-summary" ? (
+              (() => {
+                const paymentSummary = msg.card.bookingSummary;
+                const isApproved = !!msg.card.approved;
+                return (
+                  <Card className="p-4 space-y-3 border-accent/20 w-[85%]">
+                    <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
+                      Payment summary
+                    </p>
+                    {paymentSummary.priceLines.map((line) => (
+                      <div key={line.label} className="flex items-center justify-between text-sm">
+                        <span className="text-text-secondary">{line.label}</span>
+                        <span className={line.lineType === "discount" ? "text-accent font-bold" : "font-medium"}>
+                          {line.lineType === "discount" ? "-" : ""}
+                          {formatCurrency(Math.abs(line.amount), paymentSummary.currency)}
+                        </span>
+                      </div>
+                    ))}
+                    <div className="pt-2 border-t border-border flex items-center justify-between">
+                      <span className="font-bold">Payable total</span>
+                      <span className="font-bold text-accent">
+                        {formatCurrency(paymentSummary.payableTotal, paymentSummary.currency)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-text-secondary flex items-center gap-2">
+                      <Ticket size={12} />
+                      Redeeming {paymentSummary.pointsRedemption.pointsUsed} ORIN points for{" "}
+                      {formatCurrency(paymentSummary.pointsRedemption.discountAmount, paymentSummary.currency)} off
+                    </p>
+                    <button
+                      onClick={handleFinalizeCuratedBooking}
+                      disabled={isApproved}
+                      className={cn(
+                        "w-full py-2 rounded-xl text-sm font-bold transition-colors",
+                        isApproved
+                          ? "bg-card border border-border text-text-muted cursor-not-allowed"
+                          : "bg-accent text-[#332F2E]"
+                      )}
+                    >
+                      {isApproved ? "Booking approved" : "Final approval"}
+                    </button>
+                  </Card>
+                );
+              })()
+            ) : (
+              <div
+                className={cn(
+                  "px-4 py-3 rounded-2xl max-w-[85%] shadow-sm",
+                  msg.role === "orin"
+                    ? "bg-card border border-border text-text-primary rounded-tl-none font-light leading-relaxed"
+                    : "bg-accent text-[#332F2E] font-medium rounded-tr-none shadow-accent/10"
+                )}
+              >
+                <p className="text-sm md:text-base whitespace-pre-wrap">{renderTextWithLinks(msg.text)}</p>
+              </div>
+            )}
           </motion.div>
         ))}
         {isProcessingVoice && (
@@ -1345,105 +1594,6 @@ const Dashboard = ({
         )}
         <div ref={messagesEndRef} />
 
-        {bookingFlowStage === "options" && curatedResponse && (
-          <div className="space-y-3 pt-2">
-            <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
-              Curated stays (2-3 only)
-            </p>
-            {curatedResponse.options.map((option) => (
-              <Card key={option.hotelId} className="p-4 space-y-3 border-accent/20">
-                <div className="flex items-start gap-3">
-                  <img
-                    src={option.image}
-                    alt={option.hotelName}
-                    className="w-20 h-20 rounded-xl object-cover border border-border"
-                  />
-                  <div className="space-y-1 min-w-0">
-                    <h3 className="font-bold text-sm">{option.hotelName}</h3>
-                    <p className="text-text-muted text-xs flex items-center gap-1">
-                      <MapPin size={12} /> {option.location}
-                    </p>
-                    <p className="text-accent font-bold text-sm">
-                      {formatCurrency(option.price, option.currency)} / night
-                    </p>
-                  </div>
-                </div>
-                <p className="text-xs text-text-secondary">
-                  Why ORIN picked this: {option.reasonForRecommendation}
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {option.tags.map((tag) => (
-                    <span
-                      key={`${option.hotelId}-${tag}`}
-                      className="text-[10px] px-2 py-1 rounded-full border border-border text-text-muted"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-                <button
-                  onClick={() => handleSelectCuratedStay(option)}
-                  className="w-full py-2 rounded-xl bg-accent text-[#332F2E] text-sm font-bold"
-                >
-                  Select stay
-                </button>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {bookingFlowStage === "confirmation" && bookingSummary && selectedStay && (
-          <Card className="p-4 space-y-3 border-accent/20">
-            <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
-              Booking confirmation
-            </p>
-            <h3 className="font-bold">{selectedStay.hotelName}</h3>
-            <p className="text-xs text-text-secondary flex items-center gap-2">
-              <CalendarDays size={12} />
-              {bookingSummary.checkInDate} to {bookingSummary.checkOutDate}
-            </p>
-            <p className="text-xs text-text-secondary flex items-center gap-2">
-              <BedDouble size={12} />
-              {bookingSummary.guests} guests
-            </p>
-            <p className="text-xs text-text-secondary">{selectedStay.cancellationPolicy}</p>
-            <button
-              onClick={handleConfirmCuratedStay}
-              className="w-full py-2 rounded-xl bg-accent text-[#332F2E] text-sm font-bold"
-            >
-              Confirm booking details
-            </button>
-          </Card>
-        )}
-
-        {bookingFlowStage === "payment" && bookingSummary && (
-          <Card className="p-4 space-y-3 border-accent/20">
-            <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest">
-              Payment summary
-            </p>
-            {bookingSummary.priceLines.map((line) => (
-              <div key={line.label} className="flex items-center justify-between text-sm">
-                <span className="text-text-secondary">{line.label}</span>
-                <span className={line.lineType === "discount" ? "text-accent font-bold" : "font-medium"}>
-                  {line.lineType === "discount" ? "-" : ""}
-                  {formatCurrency(Math.abs(line.amount), bookingSummary.currency)}
-                </span>
-              </div>
-            ))}
-            <div className="pt-2 border-t border-border flex items-center justify-between">
-              <span className="font-bold">Payable total</span>
-              <span className="font-bold text-accent">
-                {formatCurrency(bookingSummary.payableTotal, bookingSummary.currency)}
-              </span>
-            </div>
-            <p className="text-xs text-text-secondary flex items-center gap-2">
-              <Ticket size={12} />
-              Redeeming {bookingSummary.pointsRedemption.pointsUsed} ORIN points for{" "}
-              {formatCurrency(bookingSummary.pointsRedemption.discountAmount, bookingSummary.currency)} off
-            </p>
-          </Card>
-        )}
-        
         {/* Compliance Logo in Chat Stream */}
         <div className="flex justify-center py-4 opacity-50">
           <CartesiaLogo />
@@ -1708,9 +1858,9 @@ const Dashboard = ({
         <p className="text-text-muted text-[10px] font-mono uppercase tracking-widest mb-3">Saved Preferences</p>
         <div className="grid grid-cols-2 gap-3">
           {[
-            { icon: Thermometer, label: "Sleep Temp", value: "19°C" },
-            { icon: Lightbulb, label: "Lighting", value: "Warm" },
-            { icon: Music, label: "Music", value: "Ambient" },
+            { icon: Thermometer, label: "Temperature", value: `${temp}°C` },
+            { icon: Lightbulb, label: "Lighting", value: lightingMode.charAt(0).toUpperCase() + lightingMode.slice(1) },
+            { icon: Music, label: "Music", value: musicOn ? musicTrack : "Off" },
             { icon: Globe, label: "Region", value: "Global" },
           ].map((pref) => (
             <Card key={pref.label} className="p-4 space-y-2">
@@ -2121,3 +2271,4 @@ export default function App() {
   </ThemeContext.Provider>
   );
 }
+
