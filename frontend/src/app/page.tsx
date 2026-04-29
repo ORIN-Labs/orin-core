@@ -339,7 +339,7 @@ const LandingPage = () => {
         </div>
       </motion.div>
 
-      <motion.div variants={itemVariants} className="w-full max-w-[280px] sm:max-w-sm space-y-6 mt-10 md:mt-12">
+      <motion.div variants={itemVariants} className="w-full max-w-[280px] sm:max-w-sm mt-10 md:mt-12">
         <div className="flex flex-col items-center gap-4">
           {/* Privy Login — Sole Auth Method (Email, X, Wallet) */}
           <button
@@ -350,9 +350,6 @@ const LandingPage = () => {
             <Wallet size={16} />
             {!ready ? "Loading..." : "Sign In to ORIN"}
           </button>
-          <p className="text-text-muted text-[10px] uppercase tracking-[0.2em]">
-            Email sign-in: check your email for a 4 digit code
-          </p>
         </div>
       </motion.div>
 
