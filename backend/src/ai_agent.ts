@@ -6,6 +6,7 @@ export interface GuestContext {
   name: string;
   loyaltyPoints: number;
   history: string[];
+  persona?: string; // AI generated persona summary
   currentPreferences?: {
     temp?: number;
     lighting?: string;
@@ -266,6 +267,7 @@ export class OrinAgent {
       const prompt = [
         SYSTEM_PROMPT,
         "Personalize responses with guest context, especially loyalty points.",
+        "If a 'persona' is present in the context, proactively adapt your device settings and tone to match their long-term habits.",
         "You MUST output only valid JSON with this exact schema and no extra keys:",
         '{ "temp": number, "lighting": "warm" | "cold" | "ambient", "brightness": number, "music": string, "services": string[], "raw_response": string }',
         "`brightness` must be between 0 and 100. Default is 80 if not specified.",
@@ -371,6 +373,44 @@ export class OrinAgent {
 
   generateHash(data: object): Buffer {
     return generateSha256Hash(data);
+  }
+
+  /**
+   * Generates a summarized persona based on guest history, current preferences, and interaction.
+   * This provides the long-term memory feature.
+   */
+  async generateGuestPersona(
+    guestContext: GuestContext,
+    history: any[],
+    userInput: string,
+    aiResponse: string
+  ): Promise<string> {
+    const prompt = [
+      "You are the ORIN AI Profiling Engine.",
+      "Analyze the guest's interaction and summarize their core preferences and persona in one short sentence.",
+      "Focus on lighting, temperature, music, and behavioral traits.",
+      "Example: 'Prefers warm lighting and 24°C in the evenings, enjoys jazz music, and expects fast responses.'",
+      "",
+      "Guest Context (from chain): " + JSON.stringify(guestContext),
+      "Recent Preference History: " + JSON.stringify(history),
+      "Latest User Command: " + userInput,
+      "AI Handled With: " + aiResponse,
+      "",
+      "Return ONLY the summarized persona string, max 30 words."
+    ].join("\n");
+
+    const messages = [
+      { role: "system" as const, content: "You are a profiling system. Return plain text only." },
+      { role: "user" as const, content: prompt },
+    ];
+
+    try {
+      const text = await this.cloudLlm.chat(messages, { maxTokens: 60, temperature: 0.3 });
+      return text.trim();
+    } catch (err) {
+      logger.warn({ err: String(err) }, "Failed to generate guest persona");
+      return "Prefers default luxury settings.";
+    }
   }
 
   async speak(text: string, options?: { voiceModel?: string }): Promise<Buffer> {

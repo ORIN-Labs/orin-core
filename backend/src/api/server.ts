@@ -15,7 +15,7 @@ import { generateSha256Hash } from "../shared/hash";
 import { getFeePayerKeypair, relayTransaction } from "../shared/feePayer";
 import { RPC_ENDPOINT } from "../shared/constants";
 import { FAST_INTENTS } from "../config/fast_intents";
-import { getGuestProfile, updateGuestAvatar } from "../state/FirestoreService";
+import { getGuestProfile, updateGuestAvatar, updateGuestPersona } from "../state/FirestoreService";
 import {
   searchStays,
   createQuote,
@@ -329,6 +329,13 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
   }
 
   try {
+    // Inject persona from Firestore if available
+    const profileData = await getGuestProfile(guestPda, 5);
+    if (profileData && profileData.profile.persona) {
+      guestContext.persona = profileData.profile.persona;
+    }
+    const recentPreferences = profileData?.preferences || [];
+
     // ?? Resolve the AI intent right now during the HTTPS request.
     // Because the blockchain Hash-Lock demands the user sign the EXACT payload Hash,
     // we cannot defer AI to the listener. The frontend MUST have the AI's hash to mint the TX.
@@ -358,6 +365,27 @@ app.post<{ Body: VoiceCommandBody }>("/api/v1/voice-command", async (request, re
   } catch (error: any) {
     reqLogger.error({ error: error.message }, "ai_processing_error");
     return reply.status(500).send({ error: "Voice AI processing failed", details: error.message });
+  } finally {
+    // Asynchronously generate and update persona
+    if (guestPda && userInput) {
+      setTimeout(async () => {
+        try {
+          const profileData = await getGuestProfile(guestPda, 5);
+          const history = profileData?.preferences || [];
+          const generatedPersona = await agent.generateGuestPersona(
+            guestContext,
+            history,
+            userInput,
+            "Handled via /api/v1/voice-command"
+          );
+          if (generatedPersona) {
+            await updateGuestPersona(guestPda, generatedPersona);
+          }
+        } catch (err) {
+          reqLogger.error({ err }, "async_persona_generation_failed");
+        }
+      }, 0);
+    }
   }
 });
 
